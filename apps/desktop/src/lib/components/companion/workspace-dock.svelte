@@ -358,7 +358,7 @@
   {#if error}<div class="dock-error" role="alert">{error}<Button size="xs" variant="ghost" onclick={() => (error = '')}>Dismiss</Button></div>{/if}
 
   <Tabs.Content value="changes" class="dock-panel changes-panel">
-    <CodeReview workspace={gitWorkspace} />
+    <CodeReview workspace={gitWorkspace} {worktree} />
   </Tabs.Content>
 
   <Tabs.Content value="browser" class="dock-panel browser-panel">

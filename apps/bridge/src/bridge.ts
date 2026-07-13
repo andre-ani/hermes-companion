@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { BridgeEnvelope, type WorktreeContext } from '@hermes-companion/contracts';
 import { BridgeStore } from './bridge-store.js';
-import { attachWorktree, commit, commitMetadata, createPullRequest, createWorktree, diff, githubForgeStatus, inspectRepository, mergeWorktree, push, removeWorktree, stage, status, viewPullRequest } from './git-service.js';
+import { attachWorktree, commit, commitMetadata, createPullRequest, createWorktree, diff, githubForgeStatus, inspectRepository, mergeWorktree, push, remoteStatus, removeWorktree, revert, stage, status, unstage, viewPullRequest } from './git-service.js';
 import { TerminalManager } from './terminal-manager.js';
 import { createFileEntry, deleteFileEntry, listFiles, moveFileEntry, previewFile, readTextFile, searchTextFiles, writeTextFile } from './file-service.js';
 
@@ -52,7 +52,10 @@ export class DefaultCompanionBridge implements CompanionBridge {
       case 'git.diff': return diff((await this.requireWorktree(payload.worktreeId)).path, payload.cached);
       case 'git.commit.metadata': return commitMetadata((await this.requireWorktree(payload.worktreeId)).path);
       case 'git.stage': return stage((await this.requireWorktree(payload.worktreeId)).path, payload.paths);
+      case 'git.unstage': return unstage((await this.requireWorktree(payload.worktreeId)).path, payload.paths);
+      case 'git.revert': return revert((await this.requireWorktree(payload.worktreeId)).path, payload.paths);
       case 'git.commit': return commit((await this.requireWorktree(payload.worktreeId)).path, payload.message, payload.amend);
+      case 'git.remote.status': { const worktree = await this.requireWorktree(payload.worktreeId); return remoteStatus(worktree.path, worktree.branch, payload.remote); }
       case 'git.push': { const worktree = await this.requireWorktree(payload.worktreeId); return push(worktree.path, worktree.branch, payload.remote, payload.forceWithLease); }
       case 'git.github.status': return githubForgeStatus();
       case 'git.pr.view': return viewPullRequest((await this.requireWorktree(payload.worktreeId)).path);

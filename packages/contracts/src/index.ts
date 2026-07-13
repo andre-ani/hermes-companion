@@ -780,6 +780,22 @@ export const GitCommitMetadata = z.object({
 });
 export type GitCommitMetadata = z.infer<typeof GitCommitMetadata>;
 
+export const GitCommitResult = z.object({
+  stdout: z.string(),
+  stderr: z.string(),
+  sha: z.string().regex(/^[0-9a-f]{40,64}$/)
+});
+export type GitCommitResult = z.infer<typeof GitCommitResult>;
+
+export const GitRemoteStatus = z.object({
+  remote: z.string().min(1),
+  configured: z.boolean(),
+  upstream: z.string().min(1).nullable(),
+  canPush: z.boolean(),
+  reason: z.string().min(1).nullable()
+});
+export type GitRemoteStatus = z.infer<typeof GitRemoteStatus>;
+
 export const HermesActionStatus = z.object({ name: z.string().min(1), pid: z.number().int().positive().nullable(), running: z.boolean(), exit_code: z.number().int().nullable(), lines: z.array(z.string()).max(2_000) });
 export type HermesActionStatus = z.infer<typeof HermesActionStatus>;
 
@@ -867,7 +883,10 @@ export const BridgeEnvelope = z.object({
     z.object({ action: z.literal('git.diff'), worktreeId: z.string().min(1), cached: z.boolean().default(false) }),
     z.object({ action: z.literal('git.commit.metadata'), worktreeId: z.string().min(1) }),
     z.object({ action: z.literal('git.stage'), worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).max(2_000).default(['.']) }),
+    z.object({ action: z.literal('git.unstage'), worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).max(2_000).default(['.']) }),
+    z.object({ action: z.literal('git.revert'), worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).min(1).max(2_000) }),
     z.object({ action: z.literal('git.commit'), worktreeId: z.string().min(1), message: z.string().trim().min(1).max(5_000), amend: z.boolean().default(false) }),
+    z.object({ action: z.literal('git.remote.status'), worktreeId: z.string().min(1), remote: z.string().min(1).max(255).default('origin') }),
     z.object({ action: z.literal('git.push'), worktreeId: z.string().min(1), remote: z.string().default('origin'), forceWithLease: z.boolean().default(false) }),
     z.object({ action: z.literal('git.github.status'), worktreeId: z.string().min(1) }),
     z.object({ action: z.literal('git.pr.view'), worktreeId: z.string().min(1) }),

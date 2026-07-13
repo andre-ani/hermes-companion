@@ -1,5 +1,5 @@
 import { command, query } from '$app/server';
-import { GitCommitMetadata, HermesGitBranch, HermesGitWorkspace, HermesGitWorktree, HermesRepoStatus, HermesReviewList, HermesReviewScope, HermesReviewShipInfo, HermesWorktreeCreateInput, ProjectBinding, WorktreeRecord, z } from '@hermes-companion/contracts';
+import { GitCommitMetadata, GitCommitResult, GitRemoteStatus, HermesGitBranch, HermesGitWorkspace, HermesGitWorktree, HermesRepoStatus, HermesReviewList, HermesReviewScope, HermesWorktreeCreateInput, ProjectBinding, WorktreeRecord, z } from '@hermes-companion/contracts';
 import { getCompanionRepository } from '$lib/server/companion-repository';
 import { invokeExecutionHost } from '$lib/server/execution-host';
 import { invokeNative } from '$lib/server/native-client';
@@ -125,15 +125,13 @@ const HermesGitReviewQuery = HermesGitWorkspace.extend({ scope: HermesReviewScop
 
 export const getHermesGitReview = query(HermesGitReviewQuery, async (input) => {
   const resolved = await resolveHermesGitWorkspace(input);
-  const [status, review, ship] = await Promise.all([
+  const [status, review] = await Promise.all([
     resolved.client.requestControl<unknown>(gitQuery('status', { path: resolved.path })),
-    resolved.client.requestControl<unknown>(gitQuery('review/list', { path: resolved.path, scope: input.scope })),
-    resolved.client.requestControl<unknown>(gitQuery('review/ship-info', { path: resolved.path }))
+    resolved.client.requestControl<unknown>(gitQuery('review/list', { path: resolved.path, scope: input.scope }))
   ]);
   return {
     status: HermesRepoStatus.nullable().parse(status),
-    review: HermesReviewList.parse(review),
-    ship: HermesReviewShipInfo.parse(ship)
+    review: HermesReviewList.parse(review)
   };
 });
 
@@ -141,42 +139,6 @@ export const getHermesGitReviewDiff = query(HermesGitReviewQuery.extend({ file: 
   const resolved = await resolveHermesGitWorkspace(input);
   const payload = await resolved.client.requestControl<{ diff?: unknown }>(gitQuery('review/diff', { path: resolved.path, scope: input.scope, file: input.file, staged: input.scope === 'uncommitted' && input.staged }));
   return { diff: z.string().parse(payload.diff ?? '') };
-});
-
-const HermesGitFileMutation = HermesGitWorkspace.extend({ file: z.string().min(1).max(4_096).nullable().default(null) });
-async function mutateHermesReview(input: z.infer<typeof HermesGitFileMutation>, action: 'stage' | 'unstage' | 'revert') {
-  const repository = getCompanionRepository();
-  const resolved = await resolveHermesGitWorkspace(input);
-  await resolved.client.requestControl(`/api/git/review/${action}`, { method: 'POST', body: JSON.stringify({ path: resolved.path, file: input.file }) });
-  await repository.recordAudit(`hermes.git.${action}`, resolved.path, { projectId: input.projectId, file: input.file });
-  return { ok: true as const };
-}
-export const stageHermesGitReview = command(HermesGitFileMutation, async (input) => mutateHermesReview(input, 'stage'));
-export const unstageHermesGitReview = command(HermesGitFileMutation, async (input) => mutateHermesReview(input, 'unstage'));
-export const revertHermesGitReview = command(HermesGitFileMutation, async (input) => mutateHermesReview(input, 'revert'));
-
-export const commitHermesGitReview = command(HermesGitWorkspace.extend({ message: z.string().trim().min(1).max(5_000), push: z.boolean().default(false) }), async (input) => {
-  const repository = getCompanionRepository();
-  const resolved = await resolveHermesGitWorkspace(input);
-  await resolved.client.requestControl('/api/git/review/commit', { method: 'POST', body: JSON.stringify({ path: resolved.path, message: input.message, push: input.push }) });
-  await repository.recordAudit('hermes.git.commit', resolved.path, { projectId: input.projectId, push: input.push });
-  return { ok: true as const };
-});
-
-export const pushHermesGitReview = command(HermesGitWorkspace, async (input) => {
-  const repository = getCompanionRepository();
-  const resolved = await resolveHermesGitWorkspace(input);
-  await resolved.client.requestControl('/api/git/review/push', { method: 'POST', body: JSON.stringify({ path: resolved.path }) });
-  await repository.recordAudit('hermes.git.push', resolved.path, { projectId: input.projectId });
-  return { ok: true as const };
-});
-
-export const createHermesGitPullRequest = command(HermesGitWorkspace, async (input) => {
-  const repository = getCompanionRepository();
-  const resolved = await resolveHermesGitWorkspace(input);
-  const result = z.object({ url: z.string().url() }).parse(await resolved.client.requestControl('/api/git/review/create-pr', { method: 'POST', body: JSON.stringify({ path: resolved.path }) }));
-  await repository.recordAudit('hermes.git.pr.created', resolved.path, { projectId: input.projectId, url: result.url });
-  return result;
 });
 
 export const bindProject = command(ProjectBinding, async (project) => getCompanionRepository().upsertProject(project));
@@ -282,6 +244,28 @@ export const getWorktreeReview = command(z.object({ worktreeId: z.string().min(1
 export const getWorktreeGitHubStatus = query(z.object({ worktreeId: z.string().min(1) }), async ({ worktreeId }) => getGitHubForgeStatusOnHost(worktreeId));
 export const getWorktreePullRequest = query(z.object({ worktreeId: z.string().min(1) }), async ({ worktreeId }) => getGitHubPullRequestOnHost(worktreeId));
 
+export const getWorktreeRemoteStatus = query(z.object({ worktreeId: z.string().min(1), remote: z.string().min(1).default('origin') }), async ({ worktreeId, remote }) => {
+  const worktree = (await getCompanionRepository().listWorktrees()).find((item) => item.worktreeId === worktreeId);
+  if (!worktree) throw new Error('Worktree was not found.');
+  return GitRemoteStatus.parse(await invokeExecutionHost<unknown>({
+    localCapability: 'git.remote.status',
+    localInput: { cwd: worktree.path, branch: worktree.branch, remote },
+    remoteCapability: 'git',
+    remotePayload: { action: 'git.remote.status', worktreeId, remote }
+  }));
+});
+
+export const getWorktreeCommitMetadata = query(z.object({ worktreeId: z.string().min(1) }), async ({ worktreeId }) => {
+  const worktree = (await getCompanionRepository().listWorktrees()).find((item) => item.worktreeId === worktreeId);
+  if (!worktree) throw new Error('Worktree was not found.');
+  return GitCommitMetadata.parse(await invokeExecutionHost<unknown>({
+    localCapability: 'git.commit.metadata',
+    localInput: { cwd: worktree.path },
+    remoteCapability: 'git',
+    remotePayload: { action: 'git.commit.metadata', worktreeId }
+  }));
+});
+
 export const stageWorktree = command(z.object({ worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).max(2_000).default(['.']) }), async ({ worktreeId, paths }) => {
   const repository = getCompanionRepository();
   const worktree = (await repository.listWorktrees()).find((item) => item.worktreeId === worktreeId);
@@ -290,11 +274,27 @@ export const stageWorktree = command(z.object({ worktreeId: z.string().min(1), p
   await repository.recordAudit('git.stage', worktreeId, { paths }); return result;
 });
 
+export const unstageWorktree = command(z.object({ worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).max(2_000).default(['.']) }), async ({ worktreeId, paths }) => {
+  const repository = getCompanionRepository();
+  const worktree = (await repository.listWorktrees()).find((item) => item.worktreeId === worktreeId);
+  if (!worktree) throw new Error('Worktree was not found.');
+  const result = await invokeExecutionHost<{ stdout: string; stderr: string }>({ localCapability: 'git.unstage', localInput: { cwd: worktree.path, paths }, remoteCapability: 'git', remotePayload: { action: 'git.unstage', worktreeId, paths } });
+  await repository.recordAudit('git.unstage', worktreeId, { paths }); return result;
+});
+
+export const revertWorktree = command(z.object({ worktreeId: z.string().min(1), paths: z.array(z.string().min(1)).min(1).max(2_000) }), async ({ worktreeId, paths }) => {
+  const repository = getCompanionRepository();
+  const worktree = (await repository.listWorktrees()).find((item) => item.worktreeId === worktreeId);
+  if (!worktree) throw new Error('Worktree was not found.');
+  const result = await invokeExecutionHost<{ stdout: string; stderr: string }>({ localCapability: 'git.revert', localInput: { cwd: worktree.path, paths }, remoteCapability: 'git', remotePayload: { action: 'git.revert', worktreeId, paths } });
+  await repository.recordAudit('git.revert', worktreeId, { paths }); return result;
+});
+
 export const commitWorktree = command(z.object({ worktreeId: z.string().min(1), message: z.string().trim().min(1).max(5_000), amend: z.boolean().default(false) }), async ({ worktreeId, message, amend }) => {
   const repository = getCompanionRepository();
   const worktree = (await repository.listWorktrees()).find((item) => item.worktreeId === worktreeId);
   if (!worktree) throw new Error('Worktree was not found.');
-  const result = await invokeExecutionHost<{ stdout: string; stderr: string }>({ localCapability: 'git.commit', localInput: { cwd: worktree.path, message, amend }, remoteCapability: 'git', remotePayload: { action: 'git.commit', worktreeId, message, amend } });
+  const result = GitCommitResult.parse(await invokeExecutionHost<unknown>({ localCapability: 'git.commit', localInput: { cwd: worktree.path, message, amend }, remoteCapability: 'git', remotePayload: { action: 'git.commit', worktreeId, message, amend } }));
   await repository.recordAudit('git.commit', worktreeId, { amend });
   return result;
 });

@@ -5,7 +5,7 @@ const desktop = new URL('../apps/desktop/src/', import.meta.url);
 const source = (path: string) => readFile(new URL(path, desktop), 'utf8');
 
 describe('native Hermes Git review architecture', () => {
-  it('keeps the visible Changes surface on authenticated Hermes Git capabilities', async () => {
+  it('routes visible review mutations through the selected worktree bridge boundary', async () => {
     const [remote, review, dock, page] = await Promise.all([
       source('lib/client/remote/projects.remote.ts'),
       source('lib/components/companion/code-review.svelte'),
@@ -13,21 +13,28 @@ describe('native Hermes Git review architecture', () => {
       source('routes/+page.svelte')
     ]);
 
-    expect(remote).toContain("gitQuery('status'");
-    expect(remote).toContain("gitQuery('review/list'");
-    expect(remote).toContain("gitQuery('review/diff'");
-    expect(remote).toContain("'/api/git/review/commit'");
-    expect(remote).toContain("'/api/git/review/push'");
-    expect(remote).toContain("'/api/git/review/create-pr'");
-    expect(remote).toContain('`/api/git/worktrees?path=');
-    expect(remote).toContain('The selected checkout is not an active worktree in this Hermes project.');
-    expect(review).toContain('getHermesGitReview({ ...requestWorkspace, scope: requestScope })');
-    expect(review).toContain('requestGeneration !== reviewRequestGeneration || requestKey !== reviewKey');
-    expect(remote).toContain("HermesReviewScope.default('uncommitted')");
-    expect(review).toContain("<Select.Item value=\"branch\" label=\"Branch changes\">Branch changes</Select.Item>");
-    expect(review).toContain('await reviewQuery.refresh()');
-    expect(review).not.toContain('getWorktreeReview');
-    expect(dock).toContain('<CodeReview workspace={gitWorkspace} />');
+    for (const capability of ['git.stage', 'git.unstage', 'git.revert', 'git.commit', 'git.push', 'git.pr.create']) {
+      expect(remote).toContain(`remotePayload: { action: '${capability}', worktreeId`);
+    }
+    expect(remote).toContain("localCapability: 'git.remote.status'");
+    expect(remote).toContain("remotePayload: { action: 'git.remote.status', worktreeId");
+    expect(remote).toContain("draft: z.boolean().default(true)");
+    expect(remote).not.toMatch(/\/api\/git\/review\/(?:stage|unstage|revert|commit|push|create-pr)/);
+
+    for (const unsafeImport of ['commitHermesGitReview', 'createHermesGitPullRequest', 'pushHermesGitReview', 'revertHermesGitReview', 'stageHermesGitReview', 'unstageHermesGitReview']) {
+      expect(review).not.toContain(unsafeImport);
+    }
+    expect(review).toContain('worktreeId');
+    expect(review).not.toContain('pushAfterCommit');
+    expect(review).not.toContain('push-after-commit');
+    expect(review).not.toMatch(/number:\s*[^\n]*\?\?\s*1/);
+    expect(review).toContain('draft: true');
+    expect(review).toContain('canPush');
+    expect(review).toContain('revertTarget');
+    expect(review).toMatch(/(?:revertTarget|target)(?:\?|)\.worktreeId/);
+    expect(review).toMatch(/revertTarget\?\.path/);
+
+    expect(dock).toContain('<CodeReview workspace={gitWorkspace} {worktree} />');
     expect(page).toContain('gitWorkspace={activeGitWorkspace}');
   });
 

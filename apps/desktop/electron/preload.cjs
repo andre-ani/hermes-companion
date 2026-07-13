@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const allowed = new Set([
-  'git.status', 'git.diff', 'git.commit.metadata', 'git.worktree.create', 'git.worktree.attach', 'git.worktree.detach', 'git.worktree.remove', 'git.commit', 'git.push', 'git.github.status', 'git.pr.view',
+  'git.status', 'git.diff', 'git.commit.metadata', 'git.stage', 'git.unstage', 'git.revert', 'git.remote.status', 'git.worktree.create', 'git.worktree.attach', 'git.worktree.detach', 'git.worktree.remove', 'git.commit', 'git.push', 'git.github.status', 'git.pr.view',
   'pty.open', 'pty.write', 'pty.resize', 'pty.read', 'pty.close', 'preview.register', 'preview.open', 'notification.status', 'notification.show', 'app.info'
 ]);
 

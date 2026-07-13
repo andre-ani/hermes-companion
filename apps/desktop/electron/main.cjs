@@ -47,8 +47,11 @@ const readJson = async (request) => {
 };
 
 const validBranch = (branch) => typeof branch === 'string' && /^(?![-/.])(?!.*\.\.)(?!.*[~^:?*\[\\\s])[^\x00-\x1f\x7f]+(?<![/.])$/.test(branch);
-const validRemote = (remote) => typeof remote === 'string' && /^[A-Za-z0-9._/-]+$/.test(remote);
-const validRelativePath = (value) => value === '.' || (typeof value === 'string' && !path.isAbsolute(value) && !value.split(/[\\/]/).includes('..'));
+const validRemote = (remote) => typeof remote === 'string' && /^(?!-)[A-Za-z0-9._/-]+$/.test(remote);
+const validRelativePath = (value) => typeof value === 'string' && Boolean(value) && (value === '.' || (!path.isAbsolute(value) && !value.split(/[\\/]/).includes('..')));
+const validateGitPaths = (paths, action, allowAll = true) => {
+  if (!Array.isArray(paths) || !paths.length || paths.some((value) => !validRelativePath(value) || (!allowAll && value === '.'))) throw new Error(`Invalid path selected for ${action}.`);
+};
 async function containedFilePath(root, value) {
   if (!validRelativePath(value || '.')) throw new Error('File path must be relative to its worktree.');
   const realRoot = await fsp.realpath(root); const candidate = await fsp.realpath(path.resolve(realRoot, value || '.'));
@@ -68,6 +71,47 @@ async function git(cwd, args) {
   const realCwd = await fsp.realpath(cwd);
   const { stdout, stderr } = await execFileAsync('git', ['-C', realCwd, ...args], { timeout: 120_000, maxBuffer: 20 * 1024 * 1024 });
   return { stdout, stderr };
+}
+async function revertGitPaths(cwd, paths) {
+  validateGitPaths(paths, 'reverting', false);
+  for (const selectedPath of paths) {
+    const before = await git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', selectedPath]);
+    if (!before.stdout) throw new Error(`Selected path has no changes to revert: ${selectedPath}`);
+    const trackedAtHead = (await git(cwd, ['ls-tree', '-r', '--name-only', '-z', 'HEAD', '--', selectedPath])).stdout
+      .split('\0').some((candidate) => candidate === selectedPath);
+    if (trackedAtHead) {
+      await git(cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', selectedPath]);
+    } else {
+      await git(cwd, ['reset', '--quiet', 'HEAD', '--', selectedPath]);
+      await git(cwd, ['clean', '-fd', '--', selectedPath]);
+    }
+    const after = await git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', selectedPath]);
+    if (after.stdout) throw new Error(`Git could not fully revert the selected path: ${selectedPath}`);
+  }
+  return { ok: true, paths };
+}
+async function commitGit(cwd, message, amend) {
+  const result = await git(cwd, ['commit', ...(amend ? ['--amend'] : []), '-m', message]);
+  const sha = (await git(cwd, ['rev-parse', 'HEAD'])).stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Git committed the changes but did not return a valid HEAD revision.');
+  return { ...result, sha };
+}
+async function gitRemoteStatus(cwd, branch, remote) {
+  if (!validRemote(remote)) throw new Error('Invalid Git remote name.');
+  if (!validBranch(branch)) throw new Error('Invalid Git branch name.');
+  const configured = (await git(cwd, ['remote'])).stdout.split(/\r?\n/).some((candidate) => candidate === remote);
+  const currentBranch = (await git(cwd, ['branch', '--show-current'])).stdout.trim();
+  const upstream = (await git(cwd, ['for-each-ref', '--format=%(upstream:short)', `refs/heads/${branch}`])).stdout.trim() || null;
+  if (!configured) return { remote, configured: false, upstream, canPush: false, reason: `Git remote '${remote}' is not configured.` };
+  const hasPushTarget = await git(cwd, ['remote', 'get-url', '--push', remote]).then((result) => Boolean(result.stdout.trim())).catch(() => false);
+  if (!hasPushTarget) return { remote, configured: true, upstream, canPush: false, reason: `Git remote '${remote}' has no push target.` };
+  if (currentBranch !== branch) return { remote, configured: true, upstream, canPush: false, reason: `The bound worktree is not on branch '${branch}'.` };
+  return { remote, configured: true, upstream, canPush: true, reason: null };
+}
+async function pushGit(cwd, branch, remote, forceWithLease) {
+  const readiness = await gitRemoteStatus(cwd, branch, remote);
+  if (!readiness.canPush) throw new Error(readiness.reason || 'This branch cannot be pushed.');
+  return git(cwd, ['push', ...(forceWithLease ? ['--force-with-lease'] : []), ...(readiness.upstream ? [] : ['--set-upstream']), remote, branch]);
 }
 async function githubForgeStatus() {
   try { await execFileAsync('gh', ['--version'], { timeout: 15_000, maxBuffer: 256 * 1024 }); }
@@ -173,7 +217,9 @@ async function dispatchNative(capability, input = {}) {
       const [subject = '', ...body] = result.stdout.replace(/\n+$/, '').split('\n');
       return { subject, body: body.join('\n').trim() };
     }
-    case 'git.stage': if (!input.paths?.length || input.paths.some((value) => !validRelativePath(value))) throw new Error('Invalid path selected for staging.'); return git(input.cwd, ['add', '--', ...input.paths]);
+    case 'git.stage': validateGitPaths(input.paths, 'staging'); return git(input.cwd, ['add', '--', ...input.paths]);
+    case 'git.unstage': validateGitPaths(input.paths, 'unstaging'); return git(input.cwd, ['reset', '--quiet', 'HEAD', '--', ...input.paths]);
+    case 'git.revert': return revertGitPaths(input.cwd, input.paths);
     case 'git.worktree.create': {
       if (!validBranch(input.branch)) throw new Error('Invalid branch name.');
       const target = path.resolve(input.targetPath);
@@ -197,11 +243,9 @@ async function dispatchNative(capability, input = {}) {
     }
     case 'git.worktree.detach': return { ok: true };
     case 'git.worktree.remove': await git(input.repositoryPath, ['worktree', 'remove', ...(input.force ? ['--force'] : []), input.worktreePath]); return { ok: true };
-    case 'git.commit': return git(input.cwd, ['commit', ...(input.amend ? ['--amend'] : []), '-m', input.message]);
-    case 'git.push': {
-      if (!validRemote(input.remote || 'origin') || !validBranch(input.branch)) throw new Error('Invalid push target.');
-      return git(input.cwd, ['push', ...(input.forceWithLease ? ['--force-with-lease'] : []), input.remote || 'origin', input.branch]);
-    }
+    case 'git.commit': return commitGit(input.cwd, input.message, input.amend);
+    case 'git.remote.status': return gitRemoteStatus(input.cwd, input.branch, input.remote || 'origin');
+    case 'git.push': return pushGit(input.cwd, input.branch, input.remote || 'origin', input.forceWithLease);
     case 'git.github.status': return githubForgeStatus();
     case 'git.pr.view': return githubPullRequest(input.cwd);
     case 'git.pr.create': {
@@ -641,3 +685,5 @@ app.on('before-quit', () => {
   rendererProcess?.kill(); nativeServer?.close();
   try { fs.unlinkSync(nativeDescriptorPath); } catch {}
 });
+
+module.exports = { dispatchNative };

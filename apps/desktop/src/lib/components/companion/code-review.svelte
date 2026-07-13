@@ -6,27 +6,34 @@
   import * as Tabs from '$lib/components/ui/tabs';
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
-  import { Switch } from '$lib/components/ui/switch';
+  import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
   import {
-    commitHermesGitReview,
-    createHermesGitPullRequest,
+    commitWorktree,
+    createWorktreePullRequest,
     getHermesGitReview,
     getHermesGitReviewDiff,
-    pushHermesGitReview,
-    revertHermesGitReview,
-    stageHermesGitReview,
-    unstageHermesGitReview
+    getWorktreeCommitMetadata,
+    getWorktreeGitHubStatus,
+    getWorktreePullRequest,
+    getWorktreeRemoteStatus,
+    pushWorktree,
+    revertWorktree,
+    stageWorktree,
+    unstageWorktree
   } from '$lib/client/remote/projects.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import { parseUnifiedDiff } from '$lib/diff-parser';
   import { CircleAlert, GitCommitHorizontal, GitPullRequest, RefreshCw, RotateCcw, Upload } from '@lucide/svelte';
-  import type { HermesGitWorkspace, HermesRepoStatus, HermesReviewFile, HermesReviewScope, HermesReviewShipInfo } from '@hermes-companion/contracts';
+  import type { GitCommitMetadata, GitHubForgeStatus, GitHubPullRequest, GitRemoteStatus, HermesGitWorkspace, HermesRepoStatus, HermesReviewFile, HermesReviewScope, WorktreeRecord } from '@hermes-companion/contracts';
 
-  let { workspace }: { workspace: HermesGitWorkspace | null } = $props();
+  let { workspace, worktree }: { workspace: HermesGitWorkspace | null; worktree: WorktreeRecord | null } = $props();
   let status = $state<HermesRepoStatus | null>(null);
   let files = $state<HermesReviewFile[]>([]);
-  let ship = $state<HermesReviewShipInfo>({ ghReady: false, pr: null });
+  let remoteStatus = $state<GitRemoteStatus>({ remote: 'origin', configured: false, upstream: null, canPush: false, reason: 'Remote status is unavailable.' });
+  let forgeStatus = $state<GitHubForgeStatus>({ installed: false, authenticated: false, message: 'GitHub CLI status is unavailable.' });
+  let pullRequest = $state<GitHubPullRequest | null>(null);
+  let commitMetadata = $state<GitCommitMetadata>({ subject: '', body: '' });
   let reviewTab = $state<'unstaged' | 'staged' | 'commit'>('unstaged');
   let reviewScope = $state<HermesReviewScope>('uncommitted');
   let selectedPath = $state<string | null>(null);
@@ -37,13 +44,17 @@
   let error = $state('');
   let notice = $state('');
   let commitMessage = $state('');
-  let pushAfterCommit = $state(false);
   let revertOpen = $state(false);
+  let revertTarget = $state<{ worktreeId: string; path: string; ownerKey: string } | null>(null);
+  let pullRequestOpen = $state(false);
+  let pullRequestTitle = $state('');
+  let pullRequestBody = $state('');
+  let pullRequestBase = $state('');
   let loadedReviewKey = $state('');
   let reviewRequestGeneration = 0;
   let diffRequestGeneration = 0;
 
-  const workspaceKey = $derived(workspace ? `${workspace.projectId}:${workspace.path}` : '');
+  const workspaceKey = $derived(workspace && worktree ? `${workspace.projectId}:${workspace.path}:${worktree.worktreeId}` : '');
   const reviewKey = $derived(`${workspaceKey}:${reviewScope}`);
   const statusByPath = $derived(new Map((status?.files ?? []).map((file) => [file.path, file])));
   const visibleFiles = $derived(reviewScope === 'branch' ? files : files.filter((file) => reviewTab === 'staged'
@@ -52,6 +63,35 @@
   const selectedFile = $derived(visibleFiles.find((file) => file.path === selectedPath) ?? visibleFiles[0] ?? null);
   const parsedDiff = $derived(parseUnifiedDiff(diff));
   const selectedDiff = $derived(parsedDiff.find((file) => file.path === selectedFile?.path) ?? parsedDiff[0] ?? null);
+  const commitDisabledReason = $derived(!worktree
+    ? 'Select a worktree before committing.'
+    : status?.conflicted
+      ? 'Resolve conflicts before committing.'
+      : !status?.staged
+        ? 'Stage at least one change before committing.'
+        : null);
+  const pushDisabledReason = $derived(!worktree
+    ? 'Select a worktree before pushing.'
+    : status?.conflicted
+      ? 'Resolve conflicts before pushing.'
+      : !remoteStatus.canPush
+        ? remoteStatus.reason ?? 'This branch has no usable Git remote.'
+        : remoteStatus.upstream && !(status?.ahead ?? 0)
+          ? 'This branch is already up to date.'
+          : null);
+  const pullRequestDisabledReason = $derived(!worktree
+    ? 'Select a worktree before creating a pull request.'
+    : pullRequest
+      ? 'A pull request already exists for this branch.'
+      : !remoteStatus.configured
+        ? remoteStatus.reason ?? 'Configure a Git remote first.'
+        : !remoteStatus.upstream
+          ? 'Push this branch before creating a pull request.'
+          : (status?.ahead ?? 0) > 0
+            ? 'Push the latest commits before creating a pull request.'
+            : !forgeStatus.authenticated
+              ? forgeStatus.message
+              : null);
 
   $effect(() => {
     if (reviewKey === loadedReviewKey) return;
@@ -59,8 +99,11 @@
     reviewRequestGeneration += 1;
     diffRequestGeneration += 1;
     loading = false; diffLoading = false;
-    status = null; files = []; ship = { ghReady: false, pr: null }; selectedPath = null; diff = ''; error = ''; notice = ''; commitMessage = '';
-    if (workspace) void refresh();
+    status = null; files = []; selectedPath = null; diff = ''; error = ''; notice = ''; commitMessage = '';
+    remoteStatus = { remote: 'origin', configured: false, upstream: null, canPush: false, reason: 'Remote status is unavailable.' };
+    forgeStatus = { installed: false, authenticated: false, message: 'GitHub CLI status is unavailable.' };
+    pullRequest = null; commitMetadata = { subject: '', body: '' }; pendingAction = ''; revertOpen = false; revertTarget = null; pullRequestOpen = false;
+    if (workspace && worktree) void refresh();
   });
 
   $effect(() => {
@@ -74,17 +117,43 @@
     const requestWorkspace = workspace;
     const requestScope = reviewScope;
     const requestKey = reviewKey;
-    if (!requestWorkspace) return;
+    const requestWorktree = worktree;
+    if (!requestWorkspace || !requestWorktree) return;
     const requestGeneration = ++reviewRequestGeneration;
     loading = true; error = '';
     try {
       const reviewQuery = getHermesGitReview({ ...requestWorkspace, scope: requestScope });
+      const remoteQuery = getWorktreeRemoteStatus({ worktreeId: requestWorktree.worktreeId, remote: 'origin' });
+      const forgeQuery = getWorktreeGitHubStatus({ worktreeId: requestWorktree.worktreeId });
+      const pullRequestQuery = getWorktreePullRequest({ worktreeId: requestWorktree.worktreeId });
+      const metadataQuery = getWorktreeCommitMetadata({ worktreeId: requestWorktree.worktreeId });
+      const remotePromise = (async () => {
+        try { await remoteQuery.refresh(); return await resolveRemoteResult(remoteQuery); }
+        catch (cause) { return { remote: 'origin', configured: false, upstream: null, canPush: false, reason: cause instanceof Error ? cause.message : 'Remote status is unavailable.' } satisfies GitRemoteStatus; }
+      })();
+      const forgePromise = (async () => {
+        try { await forgeQuery.refresh(); return await resolveRemoteResult(forgeQuery); }
+        catch (cause) { return { installed: false, authenticated: false, message: cause instanceof Error ? cause.message : 'GitHub CLI status is unavailable.' } satisfies GitHubForgeStatus; }
+      })();
+      const pullRequestPromise = (async () => {
+        try { await pullRequestQuery.refresh(); return await resolveRemoteResult(pullRequestQuery); }
+        catch { return null; }
+      })();
+      const metadataPromise = (async () => {
+        try { await metadataQuery.refresh(); return await resolveRemoteResult(metadataQuery); }
+        catch { return { subject: '', body: '' } satisfies GitCommitMetadata; }
+      })();
       await reviewQuery.refresh();
-      const result = await resolveRemoteResult(reviewQuery);
+      const [result, nextRemoteStatus, nextForgeStatus, nextPullRequest, nextCommitMetadata] = await Promise.all([
+        resolveRemoteResult(reviewQuery), remotePromise, forgePromise, pullRequestPromise, metadataPromise
+      ]);
       if (requestGeneration !== reviewRequestGeneration || requestKey !== reviewKey) return;
       status = result.status;
       files = result.review.files;
-      ship = result.ship;
+      remoteStatus = nextRemoteStatus;
+      forgeStatus = nextForgeStatus;
+      pullRequest = nextPullRequest;
+      commitMetadata = nextCommitMetadata;
       if (!visibleFiles.some((file) => file.path === selectedPath)) selectedPath = visibleFiles[0]?.path ?? null;
       await loadDiff();
     } catch (cause) {
@@ -129,53 +198,81 @@
   }
 
   async function mutate(action: 'stage' | 'unstage', file: string | null) {
-    if (!workspace || pendingAction) return;
+    if (!workspace || !worktree || pendingAction) return;
+    const ownerKey = workspaceKey;
+    const worktreeId = worktree.worktreeId;
+    const paths = [file ?? '.'];
     pendingAction = action; error = ''; notice = '';
     try {
-      if (action === 'stage') await resolveRemoteResult(stageHermesGitReview({ ...workspace, file }));
-      else await resolveRemoteResult(unstageHermesGitReview({ ...workspace, file }));
+      if (action === 'stage') await resolveRemoteResult(stageWorktree({ worktreeId, paths }));
+      else await resolveRemoteResult(unstageWorktree({ worktreeId, paths }));
+      if (ownerKey !== workspaceKey) return;
       notice = file ? `${file} ${action === 'stage' ? 'staged' : 'unstaged'}.` : `All changes ${action === 'stage' ? 'staged' : 'unstaged'}.`;
       await refresh();
-    } catch (cause) { error = cause instanceof Error ? cause.message : `Changes could not be ${action}d.`; }
-    finally { pendingAction = ''; }
+    } catch (cause) { if (ownerKey === workspaceKey) error = cause instanceof Error ? cause.message : `Changes could not be ${action}d.`; }
+    finally { if (ownerKey === workspaceKey) pendingAction = ''; }
+  }
+
+  function openRevert(file: HermesReviewFile) {
+    if (!worktree) return;
+    revertTarget = { worktreeId: worktree.worktreeId, path: file.path, ownerKey: workspaceKey };
+    revertOpen = true;
   }
 
   async function revertSelected() {
-    if (!workspace || !selectedFile || pendingAction) return;
+    const target = revertTarget;
+    if (!workspace || !target || target.ownerKey !== workspaceKey || pendingAction) return;
     pendingAction = 'revert'; error = ''; notice = '';
     try {
-      await resolveRemoteResult(revertHermesGitReview({ ...workspace, file: selectedFile.path }));
-      notice = `${selectedFile.path} reverted.`; revertOpen = false; await refresh();
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'The selected change could not be reverted.'; }
-    finally { pendingAction = ''; }
+      await resolveRemoteResult(revertWorktree({ worktreeId: target.worktreeId, paths: [target.path] }));
+      if (target.ownerKey !== workspaceKey) return;
+      notice = `${target.path} reverted.`; revertOpen = false; revertTarget = null; await refresh();
+    } catch (cause) { if (target.ownerKey === workspaceKey) error = cause instanceof Error ? cause.message : 'The selected change could not be reverted.'; }
+    finally { if (target.ownerKey === workspaceKey) pendingAction = ''; }
   }
 
   async function commit() {
-    if (!workspace || !commitMessage.trim() || pendingAction) return;
+    if (!workspace || !worktree || commitDisabledReason || !commitMessage.trim() || pendingAction) return;
+    const ownerKey = workspaceKey;
+    const worktreeId = worktree.worktreeId;
     pendingAction = 'commit'; error = ''; notice = '';
     try {
-      await resolveRemoteResult(commitHermesGitReview({ ...workspace, message: commitMessage, push: pushAfterCommit }));
-      commitMessage = ''; notice = pushAfterCommit ? 'Changes committed and pushed.' : 'Changes committed.'; await refresh();
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'Hermes could not create the commit.'; }
-    finally { pendingAction = ''; }
+      const result = await resolveRemoteResult(commitWorktree({ worktreeId, message: commitMessage, amend: false }));
+      if (ownerKey !== workspaceKey) return;
+      commitMessage = ''; notice = `Committed ${result.sha.slice(0, 8)}.`; await refresh();
+    } catch (cause) { if (ownerKey === workspaceKey) error = cause instanceof Error ? cause.message : 'The commit could not be created.'; }
+    finally { if (ownerKey === workspaceKey) pendingAction = ''; }
   }
 
   async function push() {
-    if (!workspace || pendingAction) return;
+    if (!workspace || !worktree || pushDisabledReason || pendingAction) return;
+    const ownerKey = workspaceKey;
+    const worktreeId = worktree.worktreeId;
     pendingAction = 'push'; error = ''; notice = '';
-    try { await resolveRemoteResult(pushHermesGitReview(workspace)); notice = 'Branch pushed.'; await refresh(); }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Hermes could not push this branch.'; }
-    finally { pendingAction = ''; }
+    try { await resolveRemoteResult(pushWorktree({ worktreeId, remote: remoteStatus.remote, forceWithLease: false })); if (ownerKey !== workspaceKey) return; notice = 'Branch pushed.'; await refresh(); }
+    catch (cause) { if (ownerKey === workspaceKey) error = cause instanceof Error ? cause.message : 'The branch could not be pushed.'; }
+    finally { if (ownerKey === workspaceKey) pendingAction = ''; }
+  }
+
+  function openPullRequestDialog() {
+    if (pullRequestDisabledReason) return;
+    pullRequestTitle = commitMetadata.subject || `Update ${workspace?.branch ?? 'branch'}`;
+    pullRequestBody = commitMetadata.body;
+    pullRequestBase = status?.defaultBranch || 'main';
+    pullRequestOpen = true;
   }
 
   async function createPullRequest() {
-    if (!workspace || pendingAction || !ship.ghReady) return;
+    if (!workspace || !worktree || pullRequestDisabledReason || !pullRequestTitle.trim() || !pullRequestBase.trim() || pendingAction) return;
+    const ownerKey = workspaceKey;
+    const worktreeId = worktree.worktreeId;
     pendingAction = 'pr'; error = ''; notice = '';
     try {
-      const result = await resolveRemoteResult(createHermesGitPullRequest(workspace));
-      notice = 'Pull request created.'; ship = { ghReady: true, pr: { url: result.url, state: 'OPEN', number: ship.pr?.number ?? 1 } }; await refresh();
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'Hermes could not create the pull request.'; }
-    finally { pendingAction = ''; }
+      await resolveRemoteResult(createWorktreePullRequest({ worktreeId, title: pullRequestTitle, body: pullRequestBody, base: pullRequestBase, draft: true }));
+      if (ownerKey !== workspaceKey) return;
+      pullRequestOpen = false; notice = 'Draft pull request created.'; await refresh();
+    } catch (cause) { if (ownerKey === workspaceKey) error = cause instanceof Error ? cause.message : 'The draft pull request could not be created.'; }
+    finally { if (ownerKey === workspaceKey) pendingAction = ''; }
   }
 </script>
 
@@ -184,7 +281,7 @@
     <div><span class="data-label">Changes</span><h2 id="review-heading">{workspace?.branch ?? 'Working tree'}</h2></div>
     <div class="review-summary">
       {#if status && reviewScope === 'uncommitted'}<span><b>+{status.added}</b> <i>−{status.removed}</i></span>{/if}
-      {#if ship.pr}<a href={ship.pr.url} target="_blank" rel="noreferrer">PR #{ship.pr.number}</a>{/if}
+      {#if pullRequest}<a href={pullRequest.url} target="_blank" rel="noreferrer">{pullRequest.isDraft ? 'Draft ' : ''}PR #{pullRequest.number}</a>{/if}
       <Button size="icon-sm" variant="ghost" disabled={!workspace || loading} onclick={refresh} aria-label="Refresh Git review" title="Refresh Git review"><RefreshCw /></Button>
     </div>
   </header>
@@ -205,15 +302,15 @@
     {:else}<Tabs.Root bind:value={reviewTab} class="review-tabs-root">
       <div class="review-tabs">
         <Tabs.List variant="line"><Tabs.Trigger value="unstaged">Changes <Badge variant="outline">{status?.unstaged ?? 0}</Badge></Tabs.Trigger><Tabs.Trigger value="staged">Staged <Badge variant="outline">{status?.staged ?? 0}</Badge></Tabs.Trigger><Tabs.Trigger value="commit">Commit</Tabs.Trigger></Tabs.List>
-        {#if reviewTab !== 'commit'}<div><Button size="xs" variant="ghost" disabled={!selectedFile || Boolean(pendingAction)} onclick={() => (revertOpen = true)}><RotateCcw data-icon="inline-start" /> Revert</Button>{#if reviewTab === 'unstaged'}<Button size="xs" variant="outline" disabled={!selectedFile || Boolean(pendingAction)} onclick={() => mutate('stage', selectedFile?.path ?? null)}>Stage file</Button><Button size="xs" variant="outline" disabled={!visibleFiles.length || Boolean(pendingAction)} onclick={() => mutate('stage', null)}>Stage all</Button>{:else}<Button size="xs" variant="outline" disabled={!selectedFile || Boolean(pendingAction)} onclick={() => mutate('unstage', selectedFile?.path ?? null)}>Unstage file</Button><Button size="xs" variant="outline" disabled={!visibleFiles.length || Boolean(pendingAction)} onclick={() => mutate('unstage', null)}>Unstage all</Button>{/if}</div>{/if}
+        {#if reviewTab !== 'commit'}<div><Button size="xs" variant="ghost" disabled={!selectedFile || !worktree || Boolean(pendingAction)} onclick={() => selectedFile && openRevert(selectedFile)}><RotateCcw data-icon="inline-start" /> Revert</Button>{#if reviewTab === 'unstaged'}<Button size="xs" variant="outline" disabled={!selectedFile || !worktree || Boolean(pendingAction)} onclick={() => mutate('stage', selectedFile?.path ?? null)}>Stage file</Button><Button size="xs" variant="outline" disabled={!visibleFiles.length || !worktree || Boolean(pendingAction)} onclick={() => mutate('stage', null)}>Stage all</Button>{:else}<Button size="xs" variant="outline" disabled={!selectedFile || !worktree || Boolean(pendingAction)} onclick={() => mutate('unstage', selectedFile?.path ?? null)}>Unstage file</Button><Button size="xs" variant="outline" disabled={!visibleFiles.length || !worktree || Boolean(pendingAction)} onclick={() => mutate('unstage', null)}>Unstage all</Button>{/if}</div>{/if}
       </div>
 
       <Tabs.Content value="unstaged" class="review-content">{@render reviewFiles()}</Tabs.Content>
       <Tabs.Content value="staged" class="review-content">{@render reviewFiles()}</Tabs.Content>
       <Tabs.Content value="commit" class="commit-panel">
         <form onsubmit={(event) => { event.preventDefault(); void commit(); }}>
-          <Field.FieldGroup><Field.Field><Field.FieldLabel for="commit-message">Commit message</Field.FieldLabel><Textarea id="commit-message" bind:value={commitMessage} rows={4} required /></Field.Field><Field.Field orientation="horizontal"><div><Field.FieldLabel for="push-after-commit">Push after commit</Field.FieldLabel><Field.FieldDescription>Hermes uses the branch’s configured upstream.</Field.FieldDescription></div><Switch id="push-after-commit" bind:checked={pushAfterCommit} /></Field.Field></Field.FieldGroup>
-          <div class="ship-actions"><Button type="submit" size="sm" disabled={!commitMessage.trim() || Boolean(pendingAction)}><GitCommitHorizontal data-icon="inline-start" /> {pendingAction === 'commit' ? 'Committing…' : 'Commit'}</Button><Button type="button" size="sm" variant="outline" disabled={Boolean(pendingAction)} onclick={push}><Upload data-icon="inline-start" /> Push</Button>{#if ship.ghReady}{#if ship.pr}<Button type="button" size="sm" variant="outline" href={ship.pr.url} target="_blank"><GitPullRequest data-icon="inline-start" /> Open PR</Button>{:else}<Button type="button" size="sm" variant="outline" disabled={Boolean(pendingAction)} onclick={createPullRequest}><GitPullRequest data-icon="inline-start" /> Create PR</Button>{/if}{/if}</div>
+          <Field.FieldGroup><Field.Field><Field.FieldLabel for="commit-message">Commit message</Field.FieldLabel><Textarea id="commit-message" bind:value={commitMessage} rows={4} required /><Field.FieldDescription>{commitDisabledReason ?? 'Only staged changes are included.'}</Field.FieldDescription></Field.Field></Field.FieldGroup>
+          <div class="ship-actions"><Button type="submit" size="sm" title={commitDisabledReason ?? 'Commit staged changes'} disabled={!commitMessage.trim() || Boolean(commitDisabledReason) || Boolean(pendingAction)}><GitCommitHorizontal data-icon="inline-start" /> {pendingAction === 'commit' ? 'Committing…' : 'Commit'}</Button><Button type="button" size="sm" variant="outline" title={pushDisabledReason ?? 'Push this branch'} disabled={Boolean(pushDisabledReason) || Boolean(pendingAction)} onclick={push}><Upload data-icon="inline-start" /> Push</Button>{#if pullRequest}<Button type="button" size="sm" variant="outline" href={pullRequest.url} target="_blank"><GitPullRequest data-icon="inline-start" /> Open PR</Button>{:else}<Button type="button" size="sm" variant="outline" title={pullRequestDisabledReason ?? 'Create a draft pull request'} disabled={Boolean(pullRequestDisabledReason) || Boolean(pendingAction)} onclick={openPullRequestDialog}><GitPullRequest data-icon="inline-start" /> Create draft PR</Button>{/if}</div>
         </form>
       </Tabs.Content>
     </Tabs.Root>{/if}
@@ -227,7 +324,19 @@
 {/snippet}
 
 <Dialog.Root bind:open={revertOpen}>
-  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>Revert this file?</Dialog.Title><Dialog.Description>Discard uncommitted changes in <strong>{selectedFile?.path}</strong>. This cannot be undone.</Dialog.Description></Dialog.Header><Dialog.Footer><Button type="button" variant="ghost" onclick={() => (revertOpen = false)}>Cancel</Button><Button type="button" variant="destructive" disabled={Boolean(pendingAction)} onclick={revertSelected}>{pendingAction === 'revert' ? 'Reverting…' : 'Revert file'}</Button></Dialog.Footer></Dialog.Content>
+  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>Revert this file?</Dialog.Title><Dialog.Description>Discard uncommitted changes in <strong>{revertTarget?.path}</strong>. This cannot be undone.</Dialog.Description></Dialog.Header><Dialog.Footer><Button type="button" variant="ghost" onclick={() => { revertOpen = false; revertTarget = null; }}>Cancel</Button><Button type="button" variant="destructive" disabled={!revertTarget || Boolean(pendingAction)} onclick={revertSelected}>{pendingAction === 'revert' ? 'Reverting…' : 'Revert file'}</Button></Dialog.Footer></Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={pullRequestOpen}>
+  <Dialog.Content class="sm:max-w-lg">
+    <Dialog.Header><Dialog.Title>Create draft pull request</Dialog.Title><Dialog.Description>Publish a reviewable draft from {workspace?.branch ?? 'this branch'}.</Dialog.Description></Dialog.Header>
+    <Field.FieldGroup>
+      <Field.Field><Field.FieldLabel for="pull-request-title">Title</Field.FieldLabel><Input id="pull-request-title" bind:value={pullRequestTitle} required /></Field.Field>
+      <Field.Field><Field.FieldLabel for="pull-request-base">Base branch</Field.FieldLabel><Input id="pull-request-base" bind:value={pullRequestBase} required /></Field.Field>
+      <Field.Field><Field.FieldLabel for="pull-request-body">Description</Field.FieldLabel><Textarea id="pull-request-body" bind:value={pullRequestBody} rows={6} /></Field.Field>
+    </Field.FieldGroup>
+    <Dialog.Footer><Button type="button" variant="ghost" onclick={() => (pullRequestOpen = false)}>Cancel</Button><Button type="button" disabled={!pullRequestTitle.trim() || !pullRequestBase.trim() || Boolean(pendingAction)} onclick={createPullRequest}>{pendingAction === 'pr' ? 'Creating…' : 'Create draft PR'}</Button></Dialog.Footer>
+  </Dialog.Content>
 </Dialog.Root>
 
 <style>

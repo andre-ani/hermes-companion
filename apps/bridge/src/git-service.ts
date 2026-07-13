@@ -2,11 +2,15 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { mkdir, realpath } from 'node:fs/promises';
+import type { GitCommitResult, GitRemoteStatus } from '@hermes-companion/contracts';
 import { assertAllowedExistingPath, assertAllowedTargetPath, assertBranch } from './path-policy.js';
 
 const exec = promisify(execFile);
-const validRemote = (remote: string) => /^[A-Za-z0-9._/-]+$/.test(remote);
-const validRelativePath = (value: string) => value === '.' || (!value.startsWith('/') && !value.split(/[\\/]/).includes('..'));
+const validRemote = (remote: string) => /^(?!-)[A-Za-z0-9._/-]+$/.test(remote);
+const validRelativePath = (value: string) => Boolean(value) && (value === '.' || (!value.startsWith('/') && !value.split(/[\\/]/).includes('..')));
+const validatePaths = (paths: string[], action: string, allowAll = true) => {
+  if (!paths.length || paths.some((value) => !validRelativePath(value) || (!allowAll && value === '.'))) throw new Error(`Invalid path selected for ${action}.`);
+};
 
 export async function git(cwd: string, args: string[]) {
   const safeCwd = await assertAllowedExistingPath(cwd);
@@ -63,13 +67,53 @@ export async function commitMetadata(cwd: string) {
   return { subject, body: body.join('\n').trim() };
 }
 export const stage = async (cwd: string, paths: string[]) => {
-  if (!paths.length || paths.some((value) => !validRelativePath(value))) throw new Error('Invalid path selected for staging.');
+  validatePaths(paths, 'staging');
   return git(cwd, ['add', '--', ...paths]);
 };
-export const commit = async (cwd: string, message: string, amend: boolean) => git(cwd, ['commit', ...(amend ? ['--amend'] : []), '-m', message]);
+export const unstage = async (cwd: string, paths: string[]) => {
+  validatePaths(paths, 'unstaging');
+  return git(cwd, ['reset', '--quiet', 'HEAD', '--', ...paths]);
+};
+export async function revert(cwd: string, paths: string[]) {
+  validatePaths(paths, 'reverting', false);
+  for (const path of paths) {
+    const before = await git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    if (!before.stdout) throw new Error(`Selected path has no changes to revert: ${path}`);
+    const trackedAtHead = (await git(cwd, ['ls-tree', '-r', '--name-only', '-z', 'HEAD', '--', path])).stdout
+      .split('\0').some((candidate) => candidate === path);
+    if (trackedAtHead) {
+      await git(cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', path]);
+    } else {
+      await git(cwd, ['reset', '--quiet', 'HEAD', '--', path]);
+      await git(cwd, ['clean', '-fd', '--', path]);
+    }
+    const after = await git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    if (after.stdout) throw new Error(`Git could not fully revert the selected path: ${path}`);
+  }
+  return { ok: true as const, paths };
+}
+export async function commit(cwd: string, message: string, amend: boolean): Promise<GitCommitResult> {
+  const result = await git(cwd, ['commit', ...(amend ? ['--amend'] : []), '-m', message]);
+  const sha = (await git(cwd, ['rev-parse', 'HEAD'])).stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Git committed the changes but did not return a valid HEAD revision.');
+  return { ...result, sha };
+}
+export async function remoteStatus(cwd: string, branch: string, remote: string): Promise<GitRemoteStatus> {
+  if (!validRemote(remote)) throw new Error('Invalid Git remote name.');
+  const expectedBranch = assertBranch(branch);
+  const configured = (await git(cwd, ['remote'])).stdout.split(/\r?\n/).some((candidate) => candidate === remote);
+  const currentBranch = (await git(cwd, ['branch', '--show-current'])).stdout.trim();
+  const upstream = (await git(cwd, ['for-each-ref', '--format=%(upstream:short)', `refs/heads/${expectedBranch}`])).stdout.trim() || null;
+  if (!configured) return { remote, configured: false, upstream, canPush: false, reason: `Git remote '${remote}' is not configured.` };
+  const hasPushTarget = await git(cwd, ['remote', 'get-url', '--push', remote]).then((result) => Boolean(result.stdout.trim())).catch(() => false);
+  if (!hasPushTarget) return { remote, configured: true, upstream, canPush: false, reason: `Git remote '${remote}' has no push target.` };
+  if (currentBranch !== expectedBranch) return { remote, configured: true, upstream, canPush: false, reason: `The bound worktree is not on branch '${expectedBranch}'.` };
+  return { remote, configured: true, upstream, canPush: true, reason: null };
+}
 export const push = async (cwd: string, branch: string, remote: string, forceWithLease: boolean) => {
-  if (!validRemote(remote)) throw new Error('Invalid Git remote name.'); assertBranch(branch);
-  return git(cwd, ['push', ...(forceWithLease ? ['--force-with-lease'] : []), remote, branch]);
+  const readiness = await remoteStatus(cwd, branch, remote);
+  if (!readiness.canPush) throw new Error(readiness.reason ?? 'This branch cannot be pushed.');
+  return git(cwd, ['push', ...(forceWithLease ? ['--force-with-lease'] : []), ...(readiness.upstream ? [] : ['--set-upstream']), remote, branch]);
 };
 export async function githubForgeStatus() {
   try { await exec('gh', ['--version'], { timeout: 15_000, maxBuffer: 256 * 1024 }); }
