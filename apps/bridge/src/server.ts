@@ -11,12 +11,25 @@ if (token.length < 32) throw new Error('BRIDGE_TOKEN must contain at least 32 ch
 
 const bridge = new DefaultCompanionBridge();
 const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: true });
-// Hermes intentionally rejects non-loopback Host headers when bound to
-// loopback. Keep Railway's existing forwarded scheme/host headers intact,
-// but present the loopback upstream as the direct HTTP Host.
+// Hermes validates Host against its container bind. Keep Railway's existing
+// forwarded scheme/host headers intact, but present the private upstream as
+// the direct HTTP Host.
 const hermesProxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: false });
 const sockets = new WebSocketServer({ noServer: true });
 const hermesUpstream = process.env.HERMES_UPSTREAM?.replace(/\/$/, '') ?? '';
+
+const hermesReady = async () => {
+  if (!hermesUpstream) return true;
+  try {
+    const response = await fetch(`${hermesUpstream}/api/auth/providers`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(2_000)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
 
 const authorized = (request: IncomingMessage) => {
   const provided = request.headers.authorization?.replace(/^Bearer\s+/i, '') ?? '';
@@ -94,7 +107,10 @@ async function handlePreview(request: IncomingMessage, response: ServerResponse,
 const server = createServer(async (request, response) => {
   try {
     const preview = previewRoute(request); if (preview) return handlePreview(request, response, preview);
-    if (request.url === '/healthz') return reply(response, 200, { status: 'ok', version: 'v1' });
+    if (request.url === '/healthz') {
+      const ready = await hermesReady();
+      return reply(response, ready ? 200 : 503, { status: ready ? 'ok' : 'starting', version: 'v1' });
+    }
     if (request.url === '/mcp' || request.url === '/v1/capability') {
       if (!authorized(request)) return reply(response, 404, { error: 'Not found.' });
       if (request.url === '/mcp') return handleMcp(request, response);

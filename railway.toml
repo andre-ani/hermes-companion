@@ -4,7 +4,6 @@ dockerfilePath = "infra/hermes-runtime/Dockerfile"
 watchPatterns = ["/apps/bridge/**", "/packages/contracts/**", "/infra/hermes-runtime/**", "/package.json", "/package-lock.json", "/railway.toml"]
 
 [deploy]
-startCommand = "/opt/hermes-companion/start.sh"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

@@ -48,6 +48,31 @@ const nextMessage = (socket: WebSocket, predicate: (message: Record<string, unkn
 });
 
 describe('bridge HTTP service', () => {
+  it('reports starting until its co-located Hermes upstream is ready', async () => {
+    const port = await freePort(); const upstreamPort = await freePort(); directory = await mkdtemp(join(tmpdir(), 'bridge-server-'));
+    const token = 'test-bridge-token-that-is-at-least-32-characters'; let upstreamReady = false;
+    previewServer = createServer((request, response) => {
+      if (request.url !== '/api/auth/providers') { response.writeHead(404); return response.end(); }
+      response.writeHead(upstreamReady ? 200 : 503, { 'content-type': 'application/json' });
+      response.end(upstreamReady ? '{"providers":[]}' : '{"status":"starting"}');
+    });
+    await new Promise<void>((done) => previewServer!.listen(upstreamPort, '127.0.0.1', () => done()));
+    child = spawn(process.execPath, [resolve('node_modules/tsx/dist/cli.mjs'), resolve('apps/bridge/src/server.ts')], { env: {
+      ...process.env, PORT: String(port), BRIDGE_HOST: '127.0.0.1', BRIDGE_TOKEN: token,
+      BRIDGE_STATE_DIR: directory, BRIDGE_ALLOWED_ROOTS: directory, HERMES_UPSTREAM: `http://127.0.0.1:${upstreamPort}`
+    }, stdio: 'pipe' });
+
+    for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/healthz`)).status === 503) break; } catch {} await new Promise((wait) => setTimeout(wait, 50)); }
+    const starting = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(starting.status).toBe(503);
+    expect(await starting.json()).toEqual({ status: 'starting', version: 'v1' });
+    upstreamReady = true;
+    await waitFor(`http://127.0.0.1:${port}/healthz`);
+    const ready = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ status: 'ok', version: 'v1' });
+  }, 15_000);
+
   it('serves health and rejects unauthenticated capability calls', async () => {
     const port = await freePort(); directory = await mkdtemp(join(tmpdir(), 'bridge-server-')); const token = 'test-bridge-token-that-is-at-least-32-characters';
     child = spawn(process.execPath, [resolve('node_modules/tsx/dist/cli.mjs'), resolve('apps/bridge/src/server.ts')], { env: { ...process.env, PORT: String(port), BRIDGE_HOST: '127.0.0.1', BRIDGE_TOKEN: token, BRIDGE_STATE_DIR: directory, BRIDGE_ALLOWED_ROOTS: directory }, stdio: 'pipe' });

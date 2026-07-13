@@ -3,7 +3,8 @@ set -eu
 
 : "${PORT:=9130}"
 : "${HERMES_INTERNAL_PORT:=8000}"
-export PORT HERMES_INTERNAL_PORT
+: "${HERMES_INTERNAL_HOST:=0.0.0.0}"
+export PORT HERMES_INTERNAL_PORT HERMES_INTERNAL_HOST
 
 cd /opt/hermes-companion
 /usr/local/bin/node apps/bridge/dist/server.js &
@@ -14,4 +15,4 @@ terminate() {
 }
 trap terminate EXIT INT TERM
 
-exec /init /opt/hermes/docker/main-wrapper.sh /bin/sh -c "/opt/hermes/.venv/bin/hermes serve --host 127.0.0.1 --port '$HERMES_INTERNAL_PORT'"
+exec /opt/hermes/.venv/bin/hermes serve --host "$HERMES_INTERNAL_HOST" --port "$HERMES_INTERNAL_PORT"
