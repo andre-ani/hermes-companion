@@ -74,6 +74,16 @@ describe('shell resilience', () => {
     expect(page).not.toContain("[data-settings-active='true'] { grid-template-columns: minmax(0, 1fr) 0");
   });
 
+  it('keeps gateway status owned by a foreground, connection-scoped probe', async () => {
+    const page = await source('routes/+page.svelte');
+    expect(page).toContain("import { getWorkspaceOverview, refreshGateway, selectHermesProfile } from '$lib/client/remote/gateway.remote';");
+    expect(page).toContain('async function refreshGatewayStatus()');
+    expect(page).toContain('overview?.gateway.connection.id !== result.status.connection.id');
+    expect(page).toContain('window.addEventListener(\'focus\', refresh);');
+    expect(page).toContain("document.addEventListener('visibilitychange', refresh);");
+    expect(page).toContain('const gatewayTimer = setInterval(refresh, 30_000);');
+  });
+
   it('uses a theme-relative side-pane surface', async () => {
     const [css, page] = await Promise.all([source('app.css'), source('routes/+page.svelte')]);
     expect(css).toContain('--surface-pane: color-mix(in oklab, var(--background)');

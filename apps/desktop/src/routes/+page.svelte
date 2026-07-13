@@ -31,7 +31,7 @@
   import RestoreCheckpointDialog from '$lib/components/companion/restore-checkpoint-dialog.svelte';
   import AppNotification from '$lib/components/companion/app-notification.svelte';
   import ModelProvenance from '$lib/components/companion/model-provenance.svelte';
-  import { getWorkspaceOverview, selectHermesProfile } from '$lib/client/remote/gateway.remote';
+  import { getWorkspaceOverview, refreshGateway, selectHermesProfile } from '$lib/client/remote/gateway.remote';
   import { getSessionContextUsage, getSessionMessages, recoverSessionTurn, searchSessions, sendChatMessage, setSessionArchived, setSessionUnread } from '$lib/client/remote/sessions.remote';
   import { bindHermesProjectWorktree, getProjectSessions, resolveSessionWorkspaceTarget, setProjectArchived } from '$lib/client/remote/projects.remote';
   import { getProfileUiPreferences, setProfileUiPreferences, setSessionPinned } from '$lib/client/remote/profile-ui.remote';
@@ -148,6 +148,7 @@
   const viewOwnership = new ViewOwnership();
   let visibleViewOwner = $state<ViewOwner | null>(null);
   let workspaceLoadGeneration = 0;
+  let gatewayRefreshInFlight = false;
   let profileSelectionTargetId: string | null = null;
   const profileSelections = new SerializedSelectionQueue<string>();
   let profileUiLoadGeneration = 0;
@@ -838,6 +839,26 @@
     finally { if (!silent && generation === workspaceLoadGeneration) loading = false; }
   }
 
+  // Gateway health is external state. Keep the status bar current while the
+  // shell is visible, but only project a result back into the same connection
+  // that initiated the probe so a late response cannot repaint a new gateway.
+  async function refreshGatewayStatus() {
+    const current = overview;
+    if (gatewayRefreshInFlight || !current || loading || profileSelectionTargetId !== null || document.visibilityState !== 'visible') return;
+    gatewayRefreshInFlight = true;
+    try {
+      const result = await resolveRemoteResult(refreshGateway({}));
+      if (overview?.gateway.connection.id !== result.status.connection.id) return;
+      overview = { ...overview, gateway: result.status, capabilities: result.capabilities };
+    }
+    catch {
+      // Probe failures are represented by the gateway status itself when the
+      // server can answer. Avoid replacing the current workspace with a
+      // transient banner while the next foreground probe is pending.
+    }
+    finally { gatewayRefreshInFlight = false; }
+  }
+
   async function selectSession(sessionId: string) {
     if (sessionId !== activeSessionId) draftWorktree = null;
     const currentOverview = overview;
@@ -1400,11 +1421,20 @@
   onMount(() => {
     nativePlatform = window.companion?.platform ?? '';
     const timer = setInterval(() => { clock = Date.now(); }, 1_000);
+    const refresh = () => { void refreshGatewayStatus(); };
+    const gatewayTimer = setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     void loadWorkspace(false, true);
     void resolveRemoteResult(desktopSettingsQuery).then((result) => { desktopPreferences = result.preferences; openRouterConfigured = result.openRouter.configured; openRouterVerified = result.openRouter.verified; openRouterVerificationError = result.openRouter.error; applyDesktopAppearance(result.preferences); }).catch(() => undefined);
     void resolveRemoteResult(openRouterPolicyQuery).then((result) => { openRouterPolicy = result; }).catch(() => undefined);
     void window.companion?.invoke<{ version: string; platform: NodeJS.Platform }>('app.info', {}).then((info) => { nativePlatform = info.platform; }).catch(() => undefined);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      clearInterval(gatewayTimer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   });
   async function loadProfileUi(connectionId: string) {
     const generation = ++profileUiLoadGeneration;
