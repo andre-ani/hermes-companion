@@ -849,7 +849,21 @@
     try {
       const result = await resolveRemoteResult(refreshGateway({}));
       if (overview?.gateway.connection.id !== result.status.connection.id) return;
-      overview = { ...overview, gateway: result.status, capabilities: result.capabilities };
+      const previous = overview.gateway;
+      const becameLive = previous.status === 'disconnected' && result.status.status !== 'disconnected';
+      const capabilityBoundaryChanged = previous.core.models !== result.status.core.models
+        || previous.enhanced.sessions !== result.status.enhanced.sessions
+        || previous.enhanced.sessionManagement !== result.status.enhanced.sessionManagement
+        || previous.enhanced.profiles !== result.status.enhanced.profiles
+        || previous.enhanced.config !== result.status.enhanced.config;
+      overview = { ...overview, gateway: result.status, capabilities: result.capabilities, approvalMode: result.approvalMode };
+      // Keep an offline snapshot stable, but rehydrate the authoritative
+      // workspace when a live connection returns or a Hermes capability
+      // boundary changes. Status-only projection is insufficient for sessions,
+      // models, profiles, and approval configuration.
+      if (result.status.status !== 'disconnected' && (becameLive || capabilityBoundaryChanged)) {
+        await loadWorkspace(true, false, true);
+      }
     }
     catch {
       // Probe failures are represented by the gateway status itself when the
@@ -1764,7 +1778,7 @@
 
 <AppNotification message={error} ondismiss={() => (error = '')} />
 
-<ConnectionDialog bind:open={connectOpen} connection={overview?.connections.find((connection) => connection.id === overview?.gateway.connection.id) ?? overview?.gateway.connection ?? null} onconnected={() => loadWorkspace()} />
+<ConnectionDialog bind:open={connectOpen} connection={overview?.connections.find((connection) => connection.id === overview?.gateway.connection.id) ?? overview?.gateway.connection ?? null} onconnected={() => void loadWorkspace(true, true)} />
 <ProfileDialog bind:open={profileOpen} profiles={overview?.profiles ?? []} oncreated={() => { newSession(); void loadWorkspace(true, true); }} />
 <RestoreCheckpointDialog bind:open={restoreDialogOpen} prompt={restoreTarget?.text ?? ''} pending={sending} onrestore={() => void confirmCheckpointRestore()} />
 <ProjectDialog bind:open={projectsOpen} projects={overview?.projects ?? []} worktrees={overview?.worktrees ?? []} connectionKind={overview?.gateway.connection.kind ?? 'local'} onchanged={() => loadWorkspace()} oncreated={startProjectThread} />

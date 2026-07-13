@@ -79,6 +79,11 @@ describe('shell resilience', () => {
     expect(page).toContain("import { getWorkspaceOverview, refreshGateway, selectHermesProfile } from '$lib/client/remote/gateway.remote';");
     expect(page).toContain('async function refreshGatewayStatus()');
     expect(page).toContain('overview?.gateway.connection.id !== result.status.connection.id');
+    expect(page).toContain('const becameLive = previous.status === \'disconnected\' && result.status.status !== \'disconnected\';');
+    expect(page).toContain('previous.enhanced.sessionManagement !== result.status.enhanced.sessionManagement');
+    expect(page).toContain('await loadWorkspace(true, false, true);');
+    expect(page).toContain('approvalMode: result.approvalMode');
+    expect(page).toContain('onconnected={() => void loadWorkspace(true, true)}');
     expect(page).toContain('window.addEventListener(\'focus\', refresh);');
     expect(page).toContain("document.addEventListener('visibilitychange', refresh);");
     expect(page).toContain('const gatewayTimer = setInterval(refresh, 30_000);');

@@ -39,6 +39,12 @@ const profileDisplayName = (id: string) => id === 'default'
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 
+const approvalModeFromConfig = (value: unknown): 'manual' | 'smart' | 'off' | null => {
+  const approvals = asRecord(asRecord(value).approvals);
+  const mode = approvals.mode;
+  return mode === 'manual' || mode === 'smart' || mode === 'off' ? mode : null;
+};
+
 export const discoverLocalHermesServices = query(empty, async () => discoverLocalHermesServicesOnHost({
   agentUrl: configuredLoopbackUrl(process.env.HERMES_API_URL),
   controlUrl: configuredLoopbackUrl(process.env.HERMES_CONTROL_URL)
@@ -120,8 +126,7 @@ export const getWorkspaceOverview = query(empty, async () => {
   const sessions = liveSessions.map((session) => ({ ...session, unread: unreadSessionIds.includes(session.id) || session.unread }));
   const liveModels = gateway.core.models ? await client.listModels(activeProfileId).catch(() => []) : [];
   const models = liveModels;
-  const mode = approvalConfig && typeof approvalConfig.approvals === 'object' && approvalConfig.approvals !== null && !Array.isArray(approvalConfig.approvals) ? (approvalConfig.approvals as Record<string, unknown>).mode : null;
-  return { gateway, capabilities: buildCapabilityRegistry(gateway), connections, profiles, activeProfileId, sessions, models, projects, projectTree, worktrees, audit, pinnedSessionIds, approvalMode: mode === 'manual' || mode === 'smart' || mode === 'off' ? mode : null };
+  return { gateway, capabilities: buildCapabilityRegistry(gateway), connections, profiles, activeProfileId, sessions, models, projects, projectTree, worktrees, audit, pinnedSessionIds, approvalMode: approvalModeFromConfig(approvalConfig) };
 });
 
 export const selectHermesProfile = command(z.object({ id: z.string().min(1) }), async ({ id }) => {
@@ -159,6 +164,10 @@ export const connectGateway = command(GatewayConnection.extend({
 );
 
 export const refreshGateway = command(empty, async () => {
-  const status = await getActiveHermesClient().probe();
-  return { status, capabilities: buildCapabilityRegistry(status) };
+  const client = getActiveHermesClient();
+  const status = await client.probe();
+  const approvalConfig = status.enhanced.config
+    ? await client.requestControl<Record<string, unknown>>('/api/config').catch(() => null)
+    : null;
+  return { status, capabilities: buildCapabilityRegistry(status), approvalMode: approvalModeFromConfig(approvalConfig) };
 });
