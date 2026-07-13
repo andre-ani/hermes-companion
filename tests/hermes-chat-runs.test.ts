@@ -30,8 +30,7 @@ describe('Hermes chat streaming', () => {
           socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'reasoning.delta', session_id: 'session-live', payload: { text: 'Considering' } } }));
           socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'thinking.delta', session_id: 'session-live', payload: { text: '' } } }));
           socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: 'session-live', payload: { text: 'Hello ' } } }));
-          socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: 'session-live', payload: { text: 'world' } } }));
-          socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.complete', session_id: 'session-live', payload: {} } }));
+          socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.complete', session_id: 'session-live', payload: { text: 'Hello world' } } }));
         }, 20);
       }
     }));
@@ -165,5 +164,83 @@ describe('Hermes chat streaming', () => {
     expect(snapshot.status).toBe('completed');
     expect(snapshot.message.text).toBe('PROJECT_READY');
     expect(snapshot.message.toolCalls).toEqual([expect.objectContaining({ id: 'tool-1', name: 'terminal', status: 'complete', result: 'Initialized' })]);
+  });
+
+  it('resumes the captured profile and current turn without replaying the prompt', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let connectionCount = 0;
+    let promptCount = 0;
+    let resumeCount = 0;
+    let resumedParams: Record<string, unknown> | null = null;
+    servers.push(server);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    server.on('connection', (socket) => {
+      connectionCount += 1;
+      const connectionNumber = connectionCount;
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: number; method: string; params: Record<string, unknown> };
+        if (connectionNumber === 1 && request.method === 'session.create') {
+          socket.send(JSON.stringify({
+            jsonrpc: '2.0', id: request.id,
+            result: {
+              session_id: 'transport-1', stored_session_id: 'stable-session', message_count: 2,
+              messages: [{ role: 'user', text: 'Old prompt' }, { role: 'assistant', text: 'Old answer' }]
+            }
+          }));
+        } else if (connectionNumber === 1 && request.method === 'prompt.submit') {
+          promptCount += 1;
+          socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: 'transport-1', payload: { text: 'Work' } } }));
+          setActiveHermesClient({
+            id: 'different-owner', name: 'Other Hermes', description: '', kind: 'remote', url: 'https://other.invalid', controlUrl: null,
+            serveUrl: null, serveWsUrl: 'ws://127.0.0.1:1', bridgeUrl: null, hermesProfileId: 'other-profile'
+          });
+          setTimeout(() => socket.terminate(), 10);
+        } else if (connectionNumber === 2 && request.method === 'session.resume') {
+          resumeCount += 1;
+          resumedParams ??= request.params;
+          if (resumeCount > 1) {
+            socket.send(JSON.stringify({
+              jsonrpc: '2.0', id: request.id,
+              result: {
+                session_id: 'transport-2', session_key: 'stable-session', message_count: 4,
+                messages: [
+                  { role: 'user', text: 'Old prompt' }, { role: 'assistant', text: 'Old answer' },
+                  { role: 'user', text: 'Current prompt' }, { role: 'assistant', text: 'Working complete' }
+                ],
+                running: false
+              }
+            }));
+            return;
+          }
+          const resumed = JSON.stringify({
+            jsonrpc: '2.0', id: request.id,
+            result: {
+              session_id: 'transport-2', session_key: 'stable-session', message_count: 2,
+              messages: [{ role: 'user', text: 'Old prompt' }, { role: 'assistant', text: 'Old answer' }],
+              running: true, inflight: { user: 'Current prompt', assistant: 'Working', streaming: true }
+            }
+          });
+          const immediateDelta = JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: 'transport-2', payload: { text: ' complete' } } });
+          socket.send(`${resumed}\n${immediateDelta}`);
+        }
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('WebSocket test server did not bind.');
+    setActiveHermesClient({
+      id: 'captured-owner', name: 'Hermes', description: '', kind: 'local', url: 'http://127.0.0.1:8642', controlUrl: null,
+      serveUrl: null, serveWsUrl: `ws://127.0.0.1:${address.port}`, bridgeUrl: null, hermesProfileId: 'hermes-code'
+    });
+
+    const requestId = crypto.randomUUID();
+    let snapshot = await startHermesChatTurn({ requestId, message: 'Current prompt', recoveryProbeMs: 10 });
+    while (snapshot.status === 'streaming') snapshot = await nextHermesChatTurn(requestId, snapshot.sequence);
+
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.message.text).toBe('Working complete');
+    expect(snapshot.message.text).not.toContain('Old answer');
+    expect(promptCount).toBe(1);
+    expect(connectionCount).toBe(2);
+    expect(resumedParams).toEqual({ session_id: 'stable-session', cols: 96, profile: 'hermes-code' });
   });
 });

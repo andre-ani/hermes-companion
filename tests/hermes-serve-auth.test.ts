@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HermesServeAuthSession } from '../apps/desktop/src/lib/server/hermes-serve-auth';
+import { configureHermesServeAuth, HermesServeAuthSession, resolveHermesServeWebSocketUrl } from '../apps/desktop/src/lib/server/hermes-serve-auth';
 
 describe('HermesServeAuthSession', () => {
   it('signs in once and mints a fresh single-use ticket for every socket', async () => {
@@ -38,5 +38,25 @@ describe('HermesServeAuthSession', () => {
     const session = new HermesServeAuthSession('https://hermes.example.com', { username: 'andre', password: 'secret' }, fetcher);
     expect(await session.mintWebSocketUrl()).toContain('ticket=renewed');
     expect(logins).toBe(2);
+  });
+
+  it('prefers a freshly minted ticket over a persisted static WebSocket URL', async () => {
+    let ticket = 0;
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/auth/password-login') {
+        return new Response('{}', { status: 200, headers: { 'set-cookie': 'session=owner; Path=/' } });
+      }
+      return Response.json({ ticket: `fresh-${++ticket}` });
+    }) as typeof fetch;
+    const connection = {
+      id: 'owner-gateway', name: 'Hermes', kind: 'remote' as const, url: 'https://hermes.example.com', controlUrl: null,
+      serveUrl: 'https://hermes.example.com', serveWsUrl: 'wss://hermes.example.com/api/ws?ticket=stale', bridgeUrl: null, hermesProfileId: 'hermes-code'
+    };
+    configureHermesServeAuth(connection, 'owner', 'secret', fetcher);
+
+    expect(await resolveHermesServeWebSocketUrl(connection)).toBe('wss://hermes.example.com/api/ws?ticket=fresh-1');
+    expect(await resolveHermesServeWebSocketUrl(connection)).toBe('wss://hermes.example.com/api/ws?ticket=fresh-2');
+    configureHermesServeAuth(connection);
   });
 });

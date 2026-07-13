@@ -1,15 +1,21 @@
 import { ChatTurnSnapshot, HermesMessage, type ChatAttachmentInput, type ChatTurnApproval, type ChatTurnSnapshot as ChatTurnSnapshotValue, type HermesMessage as HermesMessageValue } from '@hermes-companion/contracts';
 import { humanizeModelId, modelProviderFromId } from '../model-identity.js';
 import { getActiveHermesClient } from './hermes-client.js';
-import { HermesRpcSocket } from './hermes-serve-runs.js';
+import { HermesRpcSocket, HermesTransportDisconnectedError } from './hermes-serve-runs.js';
 import { resolveHermesServeWebSocketUrl } from './hermes-serve-auth.js';
+import { assistantAfter, inflightTurn, messageCount, reconcileAssistantText, sessionIsRunning, stableSessionKey, type HermesSessionResumePayload } from './hermes-session-recovery.js';
 import { invokeNative } from './native-client.js';
 
-type StartInput = { requestId: string; sessionId?: string; message: string; attachments?: ChatAttachmentInput[]; model?: string; modelProvider?: string; profileId?: string; cwd?: string; truncateBeforeUserOrdinal?: number; interruptFirst?: boolean };
+type StartInput = { requestId: string; sessionId?: string; message: string; attachments?: ChatAttachmentInput[]; model?: string; modelProvider?: string; profileId?: string; cwd?: string; truncateBeforeUserOrdinal?: number; interruptFirst?: boolean; recoveryProbeMs?: number };
 type State = {
   requestId: string;
+  owner: { connectionId: string; profileId: string };
   sessionId: string;
+  resumeSessionId: string;
   transportSessionId: string;
+  baselineMessageCount: number;
+  submittedText: string;
+  promptDispatched: boolean;
   sequence: number;
   latest: ChatTurnSnapshotValue;
   message: HermesMessageValue;
@@ -19,6 +25,9 @@ type State = {
   completing: boolean;
   cancellationRequested: boolean;
   pendingApproval: ChatTurnApproval | null;
+  recoveryProbeMs: number;
+  recoveryTimer: ReturnType<typeof setTimeout> | null;
+  recoveryProbeInFlight: boolean;
 };
 
 const runs = new Map<string, State>();
@@ -29,6 +38,8 @@ const string = (value: unknown) => typeof value === 'string' ? value : '';
 const wake = (run: State) => { for (const waiter of run.waiters) waiter(); run.waiters.clear(); };
 const publish = (run: State, update: Partial<HermesMessageValue>, status: ChatTurnSnapshotValue['status'], error: string | null = null) => {
   const terminal = terminalStatuses.has(status);
+  if (terminal && run.recoveryTimer) clearTimeout(run.recoveryTimer);
+  if (terminal) run.recoveryTimer = null;
   run.sequence += 1;
   run.message = HermesMessage.parse({
     ...run.message,
@@ -46,21 +57,25 @@ const retire = (run: State) => {
   timer.unref?.();
 };
 
+const failRun = (run: State, error: string, text = run.message.text, reasoning = run.message.reasoning ?? '') => {
+  if (run.terminal) return;
+  run.pendingApproval = null;
+  publish(run, { text, reasoning: reasoning || null, thinkingStatus: null }, 'failed', error);
+  run.socket.close();
+  retire(run);
+};
+
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 async function recoverCompletedMessage(run: State) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (attempt > 0) await delay(150 * attempt);
     try {
-      const resumed = await run.socket.request<{ messages?: unknown[] }>('session.resume', { session_id: run.sessionId, cols: 96 });
-      const messages = Array.isArray(resumed.messages) ? resumed.messages : [];
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const item = record(messages[index]);
-        if (item.role !== 'assistant') continue;
-        const recoveredText = string(item.text) || string(item.content);
-        const recoveredReasoning = string(item.reasoning_content) || string(item.reasoning);
-        if (recoveredText || recoveredReasoning) return { text: recoveredText, reasoning: recoveredReasoning };
-      }
+      const resumed = await run.socket.request<HermesSessionResumePayload>('session.resume', { session_id: run.resumeSessionId, cols: 96, profile: run.owner.profileId });
+      if (resumed.session_id) run.transportSessionId = resumed.session_id;
+      run.resumeSessionId = stableSessionKey(resumed, run.resumeSessionId);
+      const recovered = assistantAfter(resumed, run.baselineMessageCount);
+      if (recovered) return recovered;
     } catch {
       // A terminal event remains authoritative. Retry briefly because Hermes
       // may emit completion just before its persisted history becomes visible.
@@ -72,11 +87,18 @@ async function recoverCompletedMessage(run: State) {
 async function completeRun(run: State, payload: Record<string, unknown>, streamedText: string, streamedReasoning: string) {
   if (run.terminal || run.completing) return;
   run.completing = true;
-  let completedText = streamedText || string(payload.text);
+  const payloadText = string(payload.text);
+  const reconciledText = reconcileAssistantText(streamedText, payloadText);
+  if (reconciledText === null) {
+    failRun(run, 'Hermes completed with response text that does not match the streamed turn. Reload the session to recover its authoritative history.', streamedText, streamedReasoning);
+    return;
+  }
+  let completedText = reconciledText;
   let completedReasoning = streamedReasoning || string(payload.reasoning);
 
   if (!completedText && !completedReasoning) {
     const recovered = await recoverCompletedMessage(run);
+    if (run.terminal) return;
     if (recovered) {
       completedText = recovered.text;
       completedReasoning = recovered.reasoning;
@@ -101,74 +123,187 @@ export async function startHermesChatTurn(input: StartInput) {
   const existing = runs.get(input.requestId);
   if (existing) return existing.latest;
   const connection = getActiveHermesClient().executionContext().connection;
-  const url = await resolveHermesServeWebSocketUrl(connection);
-  if (!url) throw new Error('Connect an authenticated Hermes Serve profile before sending a message.');
+  const profileId = input.profileId ?? connection.hermesProfileId ?? 'default';
 
   let run!: State;
+  let resumeSessionId = input.sessionId ?? '';
+  let transportSessionId = '';
+  let baselineMessageCount = 0;
+  let resumedBeforeRun: HermesSessionResumePayload | null = null;
   let text = '';
   let reasoning = '';
   let thinkingStatus: string | null = null;
-  const socket = new HermesRpcSocket(url, (event) => {
-    if (!run || (event.session_id && event.session_id !== run.transportSessionId)) return;
-    const payload = record(event.payload);
-    if (event.type === 'message.delta') {
-      text += string(payload.text);
-      thinkingStatus = null;
-      publish(run, { text, thinkingStatus }, 'streaming');
-    } else if (event.type === 'thinking.delta') {
-      thinkingStatus = string(payload.text).trim() || null;
-      publish(run, { thinkingStatus }, 'streaming');
-    } else if (event.type === 'reasoning.delta') {
-      reasoning += string(payload.text);
-      publish(run, { reasoning }, 'streaming');
-    } else if (event.type === 'tool.start') {
-      const id = string(payload.tool_id) || crypto.randomUUID();
-      const tool = { id, name: string(payload.name) || 'tool', arguments: payload.args ?? payload.args_text ?? payload.context, status: 'running' as const };
-      publish(run, { toolCalls: [...run.message.toolCalls.filter((candidate) => candidate.id !== id), tool] }, 'streaming');
-    } else if (event.type === 'tool.complete') {
-      const id = string(payload.tool_id) || crypto.randomUUID();
-      const existing = run.message.toolCalls.find((candidate) => candidate.id === id);
-      const tool = { id, name: string(payload.name) || existing?.name || 'tool', arguments: payload.args ?? existing?.arguments, result: payload.result, status: 'complete' as const };
-      publish(run, { toolCalls: [...run.message.toolCalls.filter((candidate) => candidate.id !== id), tool] }, 'streaming');
-    } else if (event.type === 'approval.request') {
-      run.pendingApproval = {
-        id: string(payload.id) || run.requestId,
-        summary: string(payload.description) || string(payload.command) || 'Hermes approval required',
-        allowPermanent: payload.allow_permanent !== false
-      };
-      publish(run, {}, 'streaming');
-      void invokeNative('notification.show', { title: 'Hermes approval required', body: run.pendingApproval.summary }).catch(() => undefined);
-    } else if (event.type === 'message.complete') {
-      thinkingStatus = null;
-      void completeRun(run, payload, text, reasoning);
-    } else if (event.type === 'error') {
-      thinkingStatus = null;
-      run.pendingApproval = null;
-      publish(run, { text, reasoning: reasoning || null, thinkingStatus }, 'failed', string(payload.message) || 'Hermes did not complete the response.');
-      run.socket.close();
-      retire(run);
+  const armRecoveryProbe = () => {
+    if (!run || run.terminal) return;
+    if (run.recoveryTimer) clearTimeout(run.recoveryTimer);
+    run.recoveryTimer = setTimeout(() => void probeRecoveredRun(), run.recoveryProbeMs);
+    run.recoveryTimer.unref?.();
+  };
+  const reconcileResumedRun = async (resumed: HermesSessionResumePayload) => {
+    const inflight = inflightTurn(resumed);
+    if (sessionIsRunning(resumed)) {
+      if (inflight.user && inflight.user !== run.submittedText) {
+        failRun(run, 'Hermes resumed a different in-flight turn. Start a new message to retry safely.', text, reasoning);
+        return false;
+      }
+      const reconciled = reconcileAssistantText(text, inflight.assistant);
+      if (reconciled === null) {
+        failRun(run, 'Hermes resumed with response text that does not match the streamed turn. Start a new message to retry safely.', text, reasoning);
+        return false;
+      }
+      text = reconciled;
+      publish(run, { text, reasoning: reasoning || null, thinkingStatus: null }, 'streaming');
+      armRecoveryProbe();
+      return true;
     }
-  });
+    const recovered = assistantAfter(resumed, run.baselineMessageCount);
+    if (recovered) {
+      const reconciled = reconcileAssistantText(text, recovered.text);
+      if (reconciled === null) {
+        failRun(run, 'Hermes recovered response text that does not match the streamed turn. Reload the session to recover its authoritative history.', text, reasoning);
+        return false;
+      }
+      text = reconciled;
+      reasoning = recovered.reasoning || reasoning;
+      await completeRun(run, { status: 'complete', text }, text, reasoning);
+      return false;
+    }
+    failRun(run, 'Hermes reconnected, but could not confirm that this response completed. Start a new message to retry safely.', text, reasoning);
+    return false;
+  };
+  const probeRecoveredRun = async () => {
+    if (!run || run.terminal || run.recoveryProbeInFlight) return;
+    run.recoveryProbeInFlight = true;
+    try {
+      const resumed = await run.socket.request<HermesSessionResumePayload>('session.resume', { session_id: run.resumeSessionId, cols: 96, profile: run.owner.profileId });
+      if (resumed.session_id) run.transportSessionId = resumed.session_id;
+      run.resumeSessionId = stableSessionKey(resumed, run.resumeSessionId);
+      await reconcileResumedRun(resumed);
+    } catch {
+      if (!run.terminal && run.socket.transportState() === 'connected') armRecoveryProbe();
+    } finally {
+      run.recoveryProbeInFlight = false;
+    }
+  };
+  const socket = new HermesRpcSocket(
+    () => resolveHermesServeWebSocketUrl(connection),
+    (event) => {
+      if (!run || run.terminal || (event.session_id && event.session_id !== run.transportSessionId)) return;
+      if (run.recoveryTimer) armRecoveryProbe();
+      const payload = record(event.payload);
+      if (event.type === 'message.delta') {
+        text += string(payload.text);
+        thinkingStatus = null;
+        publish(run, { text, thinkingStatus }, 'streaming');
+      } else if (event.type === 'thinking.delta') {
+        thinkingStatus = string(payload.text).trim() || null;
+        publish(run, { thinkingStatus }, 'streaming');
+      } else if (event.type === 'reasoning.delta') {
+        reasoning += string(payload.text);
+        publish(run, { reasoning }, 'streaming');
+      } else if (event.type === 'tool.start') {
+        const id = string(payload.tool_id) || crypto.randomUUID();
+        const tool = { id, name: string(payload.name) || 'tool', arguments: payload.args ?? payload.args_text ?? payload.context, status: 'running' as const };
+        publish(run, { toolCalls: [...run.message.toolCalls.filter((candidate) => candidate.id !== id), tool] }, 'streaming');
+      } else if (event.type === 'tool.complete') {
+        const id = string(payload.tool_id) || crypto.randomUUID();
+        const existing = run.message.toolCalls.find((candidate) => candidate.id === id);
+        const tool = { id, name: string(payload.name) || existing?.name || 'tool', arguments: payload.args ?? existing?.arguments, result: payload.result, status: 'complete' as const };
+        publish(run, { toolCalls: [...run.message.toolCalls.filter((candidate) => candidate.id !== id), tool] }, 'streaming');
+      } else if (event.type === 'approval.request') {
+        run.pendingApproval = {
+          id: string(payload.id) || run.requestId,
+          summary: string(payload.description) || string(payload.command) || 'Hermes approval required',
+          allowPermanent: payload.allow_permanent !== false
+        };
+        publish(run, {}, 'streaming');
+        void invokeNative('notification.show', { title: 'Hermes approval required', body: run.pendingApproval.summary }).catch(() => undefined);
+      } else if (event.type === 'message.complete') {
+        thinkingStatus = null;
+        void completeRun(run, payload, text, reasoning);
+      } else if (event.type === 'error') {
+        thinkingStatus = null;
+        failRun(run, string(payload.message) || 'Hermes did not complete the response.', text, reasoning);
+      }
+    },
+    {
+      onStateChange: (state) => {
+        if (!run || run.terminal || state !== 'reconnecting') return;
+        thinkingStatus = 'Reconnecting…';
+        publish(run, { thinkingStatus }, 'streaming');
+      },
+      onReconnect: async (transport) => {
+        if (run?.terminal) throw new Error('The Hermes turn is no longer active.');
+        const stableId = run?.resumeSessionId || resumeSessionId;
+        if (!stableId) throw new Error('Hermes disconnected before the session could be made resumable.');
+        const resumed = await transport.request<HermesSessionResumePayload>('session.resume', {
+          session_id: stableId,
+          cols: 96,
+          profile: run?.owner.profileId ?? profileId
+        });
+        if (!resumed.session_id) throw new Error('Hermes did not resume the active session.');
+        transportSessionId = resumed.session_id;
+        resumeSessionId = stableSessionKey(resumed, stableId);
+        if (!run) {
+          resumedBeforeRun = resumed;
+          return;
+        }
+        run.transportSessionId = transportSessionId;
+        run.resumeSessionId = resumeSessionId;
+        if (!run.promptDispatched) {
+          thinkingStatus = null;
+          publish(run, { thinkingStatus }, 'streaming');
+          return;
+        }
+        thinkingStatus = null;
+        await reconcileResumedRun(resumed);
+      },
+      onPermanentClose: (error) => {
+        if (!run || run.terminal) return;
+        failRun(run, `Hermes connection was lost: ${error.message}`, text, reasoning);
+      }
+    }
+  );
 
   await socket.connect();
-  const session = input.sessionId
-    ? await socket.request<{ session_id: string; session_key?: string; stored_session_id?: string }>('session.resume', { session_id: input.sessionId, cols: 96, ...(input.profileId ? { profile: input.profileId } : {}) })
-    : await socket.request<{ session_id: string; session_key?: string; stored_session_id?: string }>('session.create', { cols: 96, source: 'desktop', profile: input.profileId ?? connection.hermesProfileId ?? 'default', ...(input.model ? { model: input.model } : {}), ...(input.modelProvider ? { provider: input.modelProvider } : {}), ...(input.cwd ? { cwd: input.cwd } : {}) });
+  let session: HermesSessionResumePayload;
+  try {
+    session = input.sessionId
+      ? await socket.request<HermesSessionResumePayload>('session.resume', { session_id: input.sessionId, cols: 96, profile: profileId })
+      : await socket.request<HermesSessionResumePayload>('session.create', { cols: 96, source: 'desktop', profile: profileId, ...(input.model ? { model: input.model } : {}), ...(input.modelProvider ? { provider: input.modelProvider } : {}), ...(input.cwd ? { cwd: input.cwd } : {}) });
+  } catch (cause) {
+    if (cause instanceof HermesTransportDisconnectedError && input.sessionId) {
+      try {
+        await socket.waitUntilConnected();
+        if (!resumedBeforeRun) throw new Error('Hermes reconnected without restoring the requested session.');
+        session = resumedBeforeRun;
+      } catch (recoveryError) {
+        socket.close();
+        throw recoveryError;
+      }
+    } else {
+      socket.close();
+      throw cause;
+    }
+  }
   if (!session.session_id) { socket.close(); throw new Error('Hermes did not return a session id.'); }
   const persistedSessionId = input.sessionId ?? session.stored_session_id ?? session.session_key ?? session.session_id;
-  if (input.interruptFirst) await socket.request('session.interrupt', { session_id: session.session_id }).catch(() => undefined);
+  transportSessionId = session.session_id;
+  resumeSessionId = stableSessionKey(session, persistedSessionId);
+  baselineMessageCount = messageCount(session);
+  if (input.interruptFirst) await socket.request('session.interrupt', { session_id: transportSessionId }).catch(() => undefined);
   const contextRefs: string[] = [];
   let hasVisualAttachment = false;
   try {
     for (const attachment of input.attachments ?? []) {
       if (attachment.mediaType.startsWith('image/')) {
-        await socket.request('image.attach_bytes', { session_id: session.session_id, content_base64: attachment.dataUrl, filename: attachment.filename });
+        await socket.request('image.attach_bytes', { session_id: transportSessionId, content_base64: attachment.dataUrl, filename: attachment.filename });
         hasVisualAttachment = true;
       } else if (attachment.mediaType === 'application/pdf') {
-        await socket.request('pdf.attach', { session_id: session.session_id, content_base64: attachment.dataUrl, filename: attachment.filename });
+        await socket.request('pdf.attach', { session_id: transportSessionId, content_base64: attachment.dataUrl, filename: attachment.filename });
         hasVisualAttachment = true;
       } else {
-        const result = await socket.request<{ ref_text?: string }>('file.attach', { session_id: session.session_id, data_url: attachment.dataUrl, name: attachment.filename });
+        const result = await socket.request<{ ref_text?: string }>('file.attach', { session_id: transportSessionId, data_url: attachment.dataUrl, name: attachment.filename });
         if (result.ref_text) contextRefs.push(result.ref_text);
       }
     }
@@ -194,12 +329,36 @@ export async function startHermesChatTurn(input: StartInput) {
     generation: { requestId: input.requestId, sequence: 0, status: 'streaming' }
   });
   const initial = ChatTurnSnapshot.parse({ requestId: input.requestId, sequence: 0, sessionId: persistedSessionId, status: 'streaming', message, approval: null, error: null });
-  run = { requestId: input.requestId, sessionId: persistedSessionId, transportSessionId: session.session_id, sequence: 0, latest: initial, message, socket, waiters: new Set(), terminal: false, completing: false, cancellationRequested: false, pendingApproval: null };
+  run = {
+    requestId: input.requestId,
+    owner: { connectionId: connection.id, profileId },
+    sessionId: persistedSessionId,
+    resumeSessionId,
+    transportSessionId,
+    baselineMessageCount,
+    submittedText,
+    promptDispatched: false,
+    sequence: 0,
+    latest: initial,
+    message,
+    socket,
+    waiters: new Set(),
+    terminal: false,
+    completing: false,
+    cancellationRequested: false,
+    pendingApproval: null,
+    recoveryProbeMs: input.recoveryProbeMs ?? 30_000,
+    recoveryTimer: null,
+    recoveryProbeInFlight: false
+  };
   runs.set(input.requestId, run);
-  void socket.request('prompt.submit', { session_id: session.session_id, text: submittedText, ...(input.truncateBeforeUserOrdinal !== undefined ? { truncate_before_user_ordinal: input.truncateBeforeUserOrdinal } : {}) }, 1_800_000).catch((cause) => {
-    if (!run.terminal) publish(run, {}, 'failed', cause instanceof Error ? cause.message : 'Hermes rejected the prompt.');
-    socket.close();
-    retire(run);
+  run.promptDispatched = true;
+  void socket.request('prompt.submit', { session_id: run.transportSessionId, text: submittedText, ...(input.truncateBeforeUserOrdinal !== undefined ? { truncate_before_user_ordinal: input.truncateBeforeUserOrdinal } : {}) }, 1_800_000).catch(async (cause) => {
+    if (cause instanceof HermesTransportDisconnectedError) {
+      await socket.waitUntilConnected().catch(() => undefined);
+      return;
+    }
+    failRun(run, cause instanceof Error ? cause.message : 'Hermes rejected the prompt.', text, reasoning);
   });
   return initial;
 }

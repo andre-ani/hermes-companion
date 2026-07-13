@@ -63,9 +63,9 @@ export class HermesServeAuthSession {
 
 const sessions = new Map<string, HermesServeAuthSession>();
 
-export const configureHermesServeAuth = (connection: GatewayConnection, username = '', password = '') => {
+export const configureHermesServeAuth = (connection: GatewayConnection, username = '', password = '', fetcher: FetchLike = fetch) => {
   if (!connection.serveUrl || !username || !password) { sessions.delete(connection.id); return null; }
-  const session = new HermesServeAuthSession(connection.serveUrl, { username, password });
+  const session = new HermesServeAuthSession(connection.serveUrl, { username, password }, fetcher);
   sessions.set(connection.id, session);
   return session;
 };
@@ -73,7 +73,10 @@ export const configureHermesServeAuth = (connection: GatewayConnection, username
 export const getHermesServeAuth = (connection: GatewayConnection) => sessions.get(connection.id) ?? null;
 export const hasHermesServeAuth = (connection: GatewayConnection) => sessions.has(connection.id);
 export const resolveHermesServeWebSocketUrl = async (connection: GatewayConnection) => {
-  if (connection.serveWsUrl) return connection.serveWsUrl;
   const session = getHermesServeAuth(connection);
-  return session ? session.mintWebSocketUrl() : null;
+  // Authenticated dashboard tickets are single-use. Prefer a newly minted URL
+  // whenever this connection owns an auth session; a persisted/static direct
+  // WebSocket URL is only the fallback for hosts that do not broker tickets.
+  if (session) return session.mintWebSocketUrl();
+  return connection.serveWsUrl || null;
 };
