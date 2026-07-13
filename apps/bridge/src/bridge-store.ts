@@ -32,11 +32,15 @@ export class BridgeStore {
     });
     await this.writes;
   }
-  async listWorktrees(projectId?: string) { return (await this.load()).worktrees.filter((item) => !projectId || item.projectId === projectId); }
+  async listWorktrees(connectionId: string, projectId?: string, profileId?: string) {
+    return (await this.load()).worktrees.filter((item) => item.connectionId === connectionId
+      && (!projectId || item.projectId === projectId)
+      && (!profileId || item.profileId === profileId));
+  }
   async getWorktree(id: string) { return (await this.load()).worktrees.find((item) => item.worktreeId === id) ?? null; }
   async addWorktree(worktree: z.infer<typeof WorktreeRecord>) {
     const state = await this.load();
-    const sameThread = state.worktrees.find((item) => item.projectId === worktree.projectId && item.threadId === worktree.threadId);
+    const sameThread = state.worktrees.find((item) => item.connectionId === worktree.connectionId && item.profileId === worktree.profileId && item.projectId === worktree.projectId && item.threadId === worktree.threadId);
     if (sameThread) {
       if (sameThread.path === worktree.path && sameThread.branch === worktree.branch) return sameThread;
       throw new Error('This Hermes session is already attached to another worktree.');

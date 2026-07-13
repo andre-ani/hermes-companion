@@ -25,7 +25,7 @@
 
   type AnnotationTask = { id: string; route: string; note: string; taskStatus: 'queued' | 'starting' | 'running' | 'completed' | 'cancelled' | 'failed'; runId: string | null; lastEventSequence: number };
 
-  let { worktree = null, gitWorkspace = null, browserOwnerKey, browserLeaseId, visible, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; browserOwnerKey: string; browserLeaseId: string; visible: boolean; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean) => void; dockTab?: string; openTabs?: string[] } = $props();
+  let { worktree = null, gitWorkspace = null, unavailableReason = null, browserOwnerKey, browserLeaseId, visible, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; unavailableReason?: string | null; browserOwnerKey: string; browserLeaseId: string; visible: boolean; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean, identity: { ownerKey: string; browserLeaseId: string }) => void; dockTab?: string; openTabs?: string[] } = $props();
   const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : 'Files';
   const surfaceOptions = [{ id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
   let tabMenuOpen = $state(false);
@@ -325,7 +325,8 @@
   }
 
   async function enterFullscreen() {
-    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: true, ...browserIdentity() })); browserState.fullscreen = true; onfullscreenchange?.(true); }
+    const identity = browserIdentity();
+    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: true, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; browserState.fullscreen = true; onfullscreenchange?.(true, identity); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Full-screen preview failed.'; }
   }
   $effect(() => { worktree?.worktreeId; installAnnotationListener(); });
@@ -390,7 +391,7 @@
   {#if error}<div class="dock-error" role="alert">{error}<Button size="xs" variant="ghost" onclick={() => (error = '')}>Dismiss</Button></div>{/if}
 
   <Tabs.Content value="changes" class="dock-panel changes-panel">
-    <CodeReview workspace={gitWorkspace} {worktree} />
+    {#if worktree && gitWorkspace}<CodeReview workspace={gitWorkspace} {worktree} />{:else}<Empty.Root><Empty.Header><Empty.Media variant="icon"><GitCompareArrows /></Empty.Media><Empty.Title>Changes unavailable</Empty.Title><Empty.Description>{unavailableReason ?? 'Select a verified project worktree to review changes.'}</Empty.Description></Empty.Header></Empty.Root>{/if}
   </Tabs.Content>
 
   <Tabs.Content value="browser" class="dock-panel browser-panel">
@@ -425,7 +426,7 @@
         <Button type="submit" size="sm" disabled={previewPending || !previewOrigin.trim()}><Play data-icon="inline-start" /> {previewPending ? 'Starting…' : 'Start preview'}</Button>
       </form>{/if}
     {:else}
-      <Empty.Root><Empty.Header><Empty.Media variant="icon"><Globe2 /></Empty.Media><Empty.Title>No worktree selected</Empty.Title><Empty.Description>Select a coding thread before starting an isolated preview.</Empty.Description></Empty.Header></Empty.Root>
+      <Empty.Root><Empty.Header><Empty.Media variant="icon"><Globe2 /></Empty.Media><Empty.Title>No worktree selected</Empty.Title><Empty.Description>{unavailableReason ?? 'Select a coding thread before starting an isolated preview.'}</Empty.Description></Empty.Header></Empty.Root>
     {/if}
     {#if annotations.length}
       <section class="annotation-tasks" aria-labelledby="annotation-tasks-title"><header><div><Bot /><div><strong id="annotation-tasks-title">Design tasks</strong><span>Hermes activity linked to this worktree</span></div></div><Badge variant="outline">{annotations.length}</Badge></header><ol>{#each annotations as task (task.id)}<li><div class="annotation-task-heading">{#if task.taskStatus === 'completed'}<CircleCheck />{:else if task.taskStatus === 'failed' || task.taskStatus === 'cancelled'}<CircleAlert />{:else}<Bot />{/if}<div><strong>{task.route}</strong><span>{task.note}</span></div><Badge variant={task.taskStatus === 'failed' ? 'destructive' : task.taskStatus === 'completed' ? 'secondary' : 'outline'}>{task.taskStatus}</Badge></div>{#if annotationEvents[task.id]?.length}<div class="annotation-stream" aria-live="polite">{#each annotationEvents[task.id].slice(-4) as item (item.sequence)}{#if item.event.type === 'text'}<pre>{item.event.text}</pre>{:else if item.event.type === 'tool'}<span>{item.event.tool.name} · {item.event.tool.status}</span>{:else if item.event.type === 'approval'}<span>Approval required: {item.event.summary}</span>{:else if item.event.type === 'status'}<span>{item.event.status}{item.event.message ? ` · ${item.event.message}` : ''}</span>{/if}{/each}</div>{/if}{#if ['queued', 'failed', 'cancelled'].includes(task.taskStatus)}<Button size="xs" variant="outline" disabled={annotationTaskPending !== null} onclick={() => runAnnotationTask(task.id)}><Play data-icon="inline-start" /> {annotationTaskPending === task.id ? 'Starting…' : 'Run with Hermes'}</Button>{/if}</li>{/each}</ol></section>
@@ -436,7 +437,7 @@
 
   <Tabs.Content value="files" class="dock-panel files-panel">
     {#if !worktree}
-      <Empty.Root><Empty.Header><Empty.Media variant="icon"><FolderTree /></Empty.Media><Empty.Title>No worktree selected</Empty.Title><Empty.Description>Bind a Git repository and create a coding thread to browse its isolated files.</Empty.Description></Empty.Header></Empty.Root>
+      <Empty.Root><Empty.Header><Empty.Media variant="icon"><FolderTree /></Empty.Media><Empty.Title>No worktree selected</Empty.Title><Empty.Description>{unavailableReason ?? 'Bind a Git repository and create a coding thread to browse its isolated files.'}</Empty.Description></Empty.Header></Empty.Root>
     {:else if selectedPreview}
       <header class="file-toolbar"><Button size="icon-sm" variant="ghost" onclick={() => (selectedPreview = null)} aria-label="Back to file list"><ChevronLeft /></Button><strong>{selectedPreview.path}</strong><Badge variant="outline">{selectedPreview.size} B</Badge></header>
       <div class="binary-preview">{#if selectedPreview.mime === 'application/pdf'}<object data={selectedPreview.dataUrl} type="application/pdf" aria-label={`PDF preview of ${selectedPreview.path}`}><p>PDF preview is unavailable in this renderer.</p></object>{:else}<img src={selectedPreview.dataUrl} alt={`Preview of ${selectedPreview.path}`} />{/if}</div>
@@ -458,7 +459,7 @@
   </Tabs.Content>
 
   <Tabs.Content value="terminal" class="dock-panel terminal-panel">
-    <TerminalSplit {worktree} layout="sidebar" />
+    <TerminalSplit {worktree} {unavailableReason} layout="sidebar" />
   </Tabs.Content>
 
   <Tabs.Content value="agents" class="dock-panel agents-panel">

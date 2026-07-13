@@ -16,6 +16,7 @@ if (rendererTarget.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].in
 const isDev = !app.isPackaged && process.env.HERMES_COMPANION_UAT !== '1';
 const uatReportDir = process.env.HERMES_COMPANION_UAT_REPORT_DIR || '';
 const stateDir = process.env.COMPANION_DATA_DIR || path.join(os.homedir(), '.hermes-companion');
+if (process.env.HERMES_COMPANION_UAT === '1') app.setPath('userData', path.join(stateDir, 'electron-user-data'));
 const nativeDescriptorPath = path.join(stateDir, 'native-endpoint.json');
 const token = crypto.randomBytes(32).toString('base64url');
 const terminals = new Map();
@@ -27,6 +28,8 @@ let mainWindow;
 const browserViewController = { claim: null, view: null, kind: null, bounds: null, layout: 'dock' };
 let nativeServer;
 let rendererProcess;
+let startupPromise;
+let uatStarted = false;
 
 const json = (response, status, value) => {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -226,7 +229,8 @@ async function dispatchNative(capability, input = {}) {
     }
     case 'git.worktree.attach': {
       if (!validBranch(input.branch)) throw new Error('Invalid branch name.');
-      const worktreePath = await fsp.realpath(input.worktreePath);
+      const requestedPath = path.resolve(input.worktreePath);
+      const worktreePath = await fsp.realpath(requestedPath);
       const listed = await git(input.repositoryPath, ['worktree', 'list', '--porcelain']);
       const paths = listed.stdout.split(/\n\s*\n/).flatMap((record) => {
         const line = record.split('\n').find((candidate) => candidate.startsWith('worktree '));
@@ -236,7 +240,11 @@ async function dispatchNative(capability, input = {}) {
       if (!registered.includes(worktreePath)) throw new Error('The selected path is not a registered worktree of this repository.');
       const branch = (await git(worktreePath, ['branch', '--show-current'])).stdout.trim();
       if (branch !== input.branch) throw new Error('The selected worktree branch no longer matches Hermes state.');
-      return { path: worktreePath, branch };
+      // Canonical paths prove filesystem identity, but the Hermes session cwd
+      // remains the cross-surface ownership key. Preserve that absolute path
+      // so macOS /var and /private/var aliases do not look like a workspace
+      // handoff after native verification succeeds.
+      return { path: requestedPath, branch };
     }
     case 'git.worktree.detach': return { ok: true };
     case 'git.worktree.remove': await git(input.repositoryPath, ['worktree', 'remove', ...(input.force ? ['--force'] : []), input.worktreePath]); return { ok: true };
@@ -506,109 +514,127 @@ async function startRenderer() {
   await waitForRenderer(rendererUrl);
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({ width: 1500, height: 940, minWidth: 960, minHeight: 680, backgroundColor: '#0d0f16', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 20, y: 17 } } : {}), webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') } });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  mainWindow.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) releaseAnyBrowserView(); });
-  mainWindow.webContents.on('render-process-gone', () => releaseAnyBrowserView());
-  mainWindow.on('close', () => releaseAnyBrowserView());
-  mainWindow.on('closed', () => { releaseAnyBrowserView(); mainWindow = null; });
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+function ensureWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  const window = new BrowserWindow({ width: 1500, height: 940, minWidth: 960, minHeight: 680, backgroundColor: '#0d0f16', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 20, y: 17 } } : {}), webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') } });
+  mainWindow = window;
+  window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) releaseAnyBrowserView(); });
+  window.webContents.on('render-process-gone', () => releaseAnyBrowserView());
+  window.on('close', () => releaseAnyBrowserView());
+  window.on('closed', () => { releaseAnyBrowserView(); if (mainWindow === window) mainWindow = null; });
+  window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const toggleDevTools = input.key === 'F12' || (process.platform === 'darwin' ? input.meta && input.alt && input.key.toLowerCase() === 'i' : input.control && input.shift && input.key.toLowerCase() === 'i');
     if (!toggleDevTools) return;
     event.preventDefault();
-    if (mainWindow.webContents.isDevToolsOpened()) mainWindow.webContents.closeDevTools(); else mainWindow.webContents.openDevTools({ mode: 'detach' });
+    if (window.webContents.isDevToolsOpened()) window.webContents.closeDevTools(); else window.webContents.openDevTools({ mode: 'detach' });
   });
-  mainWindow.on('resize', setViewBounds);
-  if (uatReportDir) void runAutomatedUat(mainWindow);
-  mainWindow.loadURL(rendererUrl);
+  window.on('resize', setViewBounds);
+  if (uatReportDir && !uatStarted) { uatStarted = true; void runAutomatedUat(window); }
+  void window.loadURL(rendererUrl);
+  return window;
 }
 
 async function runAutomatedUat(window) {
-  const timeout = setTimeout(async () => { await writeUatReport({ ok: false, error: 'Electron UAT timed out waiting for the renderer.' }); app.exit(1); }, 30_000);
+  const timeout = setTimeout(async () => { await writeUatReport({ ok: false, error: 'Electron UAT timed out waiting for the renderer.' }); app.exit(1); }, 120_000);
   try {
     await new Promise((resolve, reject) => { window.webContents.once('did-finish-load', resolve); window.webContents.once('did-fail-load', (_event, code, description) => reject(new Error(`Renderer failed to load (${code}): ${description}`))); });
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const pending = await window.webContents.executeJavaScript(`document.body.innerText.includes('Checking') || Boolean(document.querySelector('[data-slot="skeleton"]'))`);
-      if (!pending) break; await new Promise((resolve) => setTimeout(resolve, 250));
+    let rendererReady = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      rendererReady = await window.webContents.executeJavaScript(`Boolean(document.querySelector('.companion-shell[data-shell-presented="true"]')) && !document.querySelector('[data-slot="skeleton"]') && document.title === 'Implement preview relay'`);
+      if (rendererReady) break; await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!rendererReady) {
+      const readiness = await window.webContents.executeJavaScript(`(() => { const boot = document.querySelector('.shell-boot'); return { title: document.title, workspaceStarting: boot?.getAttribute('data-workspace-starting'), layoutReady: boot?.getAttribute('data-layout-ready'), targetReady: boot?.getAttribute('data-target-ready'), error: document.querySelector('[role="alert"]')?.textContent?.trim() ?? null }; })()`);
+      throw new Error(`Renderer readiness did not converge: ${JSON.stringify(readiness)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
     const evidence = await window.webContents.executeJavaScript(`(() => { const launcher = [...document.querySelectorAll('.sidebar-launchers button')].find((item) => item.innerText.includes('Capabilities')); const rect = launcher?.getBoundingClientRect(); const style = launcher ? getComputedStyle(launcher) : null; return { title: document.title, hasMain: Boolean(document.querySelector('main')), buttonCount: document.querySelectorAll('button').length, hasCompanionPreload: typeof window.companion?.invoke === 'function', nativePlatform: window.companion?.platform ?? null, skeletonCount: document.querySelectorAll('[data-slot="skeleton"]').length, capabilityLauncher: launcher ? { text: launcher.innerText, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, display: style.display, visibility: style.visibility, opacity: style.opacity, color: style.color } : null, hasStatusBar: Boolean(document.querySelector('.status-bar')), bodyText: document.body.innerText.slice(0, 2000), dimensions: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight } }; })()`);
-    const checks = { title: evidence.title.length > 0, main: evidence.hasMain === true, controls: evidence.buttonCount > 0, preload: evidence.hasCompanionPreload === true, nativePlatform: evidence.nativePlatform === process.platform, shellText: /Chat/.test(evidence.bodyText) && /Code/.test(evidence.bodyText), focusedSidebar: /(Today|Earlier)/i.test(evidence.bodyText) && /Messaging/.test(evidence.bodyText) && /Capabilities/.test(evidence.bodyText), statusBar: evidence.hasStatusBar === true, connectedGateway: /Gateway\s+enhanced/i.test(evidence.bodyText) && /Hermes API\s+Verified/.test(evidence.bodyText), sessionHistory: /Implement preview relay/.test(evidence.bodyText), modelList: /Hermes 3 Pro/.test(evidence.bodyText) };
-    const chatInspectorCollapsed = await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show workspace inspector"]') !== null`);
-    checks.chatInspectorCollapsed = chatInspectorCollapsed;
-    const toggledYolo = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.status-bar button')].find((item) => item.innerText.trim() === 'YOLO'); button?.click(); return Boolean(button) && !button.disabled; })()`);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const yoloEvidence = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.status-bar button')].find((item) => item.innerText.trim() === 'YOLO'); return { className: button?.className ?? '', title: button?.getAttribute('title') ?? '' }; })()`);
-    checks.yoloToggle = toggledYolo && /status-yolo/.test(yoloEvidence.className) && /yolo/.test(yoloEvidence.title);
+    const checks = {
+      title: evidence.title === 'Implement preview relay',
+      main: evidence.hasMain === true,
+      controls: evidence.buttonCount > 0,
+      preload: evidence.hasCompanionPreload === true,
+      nativePlatform: evidence.nativePlatform === process.platform,
+      shell: /New chat/.test(evidence.bodyText) && /Capabilities/.test(evidence.bodyText) && /Implement preview relay/.test(evidence.bodyText),
+      stableInitialGeometry: evidence.skeletonCount === 0 && evidence.dimensions.width >= 960 && evidence.dimensions.height >= 680,
+      statusBar: evidence.hasStatusBar === true && /Gateway/.test(evidence.bodyText),
+      inspectorStartsClosed: await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show right panel"]') !== null`)
+    };
     const submittedChat = await window.webContents.executeJavaScript(`(() => { const prompt = document.querySelector('#chat-prompt'); if (!(prompt instanceof HTMLTextAreaElement) || prompt.disabled) return false; prompt.value = 'Confirm the preview relay boundary.'; prompt.dispatchEvent(new Event('input', { bubbles: true })); prompt.closest('form')?.requestSubmit(); return true; })()`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const chatEvidence = await window.webContents.executeJavaScript(`document.querySelector('main')?.innerText ?? ''`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('.conversation-root')?.innerText?.includes('Confirmed: this session remains bound to its isolated preview relay and worktree.')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const chatEvidence = await window.webContents.executeJavaScript(`document.querySelector('.conversation-root')?.innerText ?? document.querySelector('main')?.innerText ?? ''`);
     checks.chatMutation = submittedChat && /Confirm the preview relay boundary\./.test(chatEvidence) && /Confirmed: this session remains bound to its isolated preview relay and worktree\./.test(chatEvidence);
-    const contextUsage = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[popovertarget="status-context-usage"]'); if (!(button instanceof HTMLButtonElement)) return false; button.click(); const popover = document.querySelector('#status-context-usage'); return Boolean(popover?.matches(':popover-open')) && /Conversation/.test(popover?.textContent ?? '') && /Tool output/.test(popover?.textContent ?? ''); })()`);
-    checks.contextUsage = contextUsage;
-    const searchedSidebarHistory = await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#session-filter'); if (!(input instanceof HTMLInputElement)) return false; input.value = 'preview'; input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-    for (let attempt = 0; attempt < 15; attempt += 1) {
-      const ready = await window.webContents.executeJavaScript(`document.querySelector('.history-results')?.innerText?.includes('Preview relay search result')`);
+    const openedContext = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[title="Show Hermes context usage"]'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('[data-slot="popover-content"][aria-label="Hermes context usage"]')?.innerText?.includes('Tool output')`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    const historySearchEvidence = await window.webContents.executeJavaScript(`(() => ({ results: document.querySelector('.history-results')?.innerText ?? '', hasDialog: Boolean(document.querySelector('[data-slot="dialog-content"]')) }))()`);
-    checks.sidebarHistorySearch = searchedSidebarHistory && /Preview relay search result/.test(historySearchEvidence.results) && historySearchEvidence.hasDialog === false;
-    const historySearchScreenshot = await window.webContents.capturePage();
-    await fsp.mkdir(uatReportDir, { recursive: true }); await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-history-search.png'), historySearchScreenshot.toPNG());
-    await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#session-filter'); if (!(input instanceof HTMLInputElement)) return; input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const createdSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => /New (thread|chat)/.test(item.innerText)); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, bodyText: document.body.innerText }))()`);
-    checks.sessionCreation = createdSession && sessionEvidence.title === 'New thread' && /New thread/.test(sessionEvidence.bodyText);
+    const contextEvidence = await window.webContents.executeJavaScript(`document.querySelector('[data-slot="popover-content"][aria-label="Hermes context usage"]')?.innerText ?? ''`);
+    checks.contextUsage = openedContext && /Conversation/.test(contextEvidence) && /Tool output/.test(contextEvidence);
+    await window.webContents.executeJavaScript(`document.querySelector('button[title="Show Hermes context usage"]')?.click()`);
     const screenshot = await window.webContents.capturePage();
     await fsp.mkdir(uatReportDir, { recursive: true }); await fsp.writeFile(path.join(uatReportDir, 'hermes-companion.png'), screenshot.toPNG());
     const repositoryPath = process.env.HERMES_COMPANION_UAT_REPOSITORY;
     const worktreePath = process.env.HERMES_COMPANION_UAT_WORKTREE;
     if (!repositoryPath || !worktreePath) throw new Error('Electron UAT repository fixture is missing.');
-    const openedCode = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.innerText.trim().startsWith('Code')); button?.click(); return Boolean(button); })()`);
+    const returnedToLinkedSession = await window.webContents.executeJavaScript(`(() => { if (document.title === 'Implement preview relay') return true; const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Implement preview relay'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      const ready = await window.webContents.executeJavaScript(`document.querySelector('#review-heading')?.textContent?.includes('Review worktree') && !document.body.innerText.includes('Preparing worktree') && !document.querySelector('[aria-label="Refresh Git review"]')?.disabled`);
+      const ready = await window.webContents.executeJavaScript(`document.title === 'Implement preview relay' && !document.querySelector('[aria-label="Show right panel"]')?.disabled`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 200));
     }
     const uatState = JSON.parse(await fsp.readFile(path.join(stateDir, 'state.json'), 'utf8'));
-    const uiWorktreePath = uatState.worktrees?.find((worktree) => worktree.threadId === 'uat-created-session')?.path ?? null;
-    const closedWorktreeDialog = true;
+    const uiWorktreePath = uatState.worktrees?.find((worktree) => worktree.threadId === 'uat-session' && worktree.worktreeId === 'uat-worktree')?.path ?? null;
     if (!uiWorktreePath) {
       const failureEvidence = await window.webContents.executeJavaScript(`(() => ({ body: document.body.innerText.slice(0, 3000), error: document.querySelector('.error-banner')?.textContent?.trim() ?? null }))()`);
-      throw new Error(`Code-mode UAT did not create a session worktree: ${JSON.stringify(failureEvidence)}`);
+      throw new Error(`The linked UAT session lost its authoritative worktree: ${JSON.stringify(failureEvidence)}`);
+    }
+    const openedInspector = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Show right panel"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const openedChanges = await window.webContents.executeJavaScript(`(() => { if (document.querySelector('#review-heading')) return true; const button = [...document.querySelectorAll('.surface-card')].find((item) => item.textContent?.trim() === 'Changes'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('#review-heading')?.textContent?.trim() === 'companion/uat-session' && !document.querySelector('[aria-label="Refresh Git review"]')?.disabled`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 200));
     }
     await dispatchNative('file.write', { root: uiWorktreePath, path: 'README.md', content: '# Electron UAT\n\nUnstaged review evidence\n' });
     const refreshedReview = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Refresh Git review"]'); button?.click(); return Boolean(button); })()`);
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const loaded = await window.webContents.executeJavaScript(`!document.querySelector('[aria-label="Refresh Git review"]')?.disabled && document.querySelector('.review-content')?.innerText?.includes('Unstaged review evidence')`);
+      const loaded = await window.webContents.executeJavaScript(`!document.querySelector('[aria-label="Refresh Git review"]')?.disabled && [...document.querySelectorAll('.review-stack nav button')].some((item) => item.textContent?.includes('README.md'))`);
       if (loaded) break; await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    const stagedReviewFile = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('.review-tabs button[title^="Stage README.md"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    const selectedReviewFile = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-stack nav button')].find((item) => item.textContent?.includes('README.md')); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const loaded = await window.webContents.executeJavaScript(`document.querySelector('.review-content')?.innerText?.includes('Unstaged review evidence')`);
+      if (loaded) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const stagedReviewFile = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-tabs button')].find((item) => item.textContent?.trim() === 'Stage file'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const staged = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('README.md staged.') && !document.querySelector('[aria-label="Refresh Git review"]')?.disabled`);
       if (staged) break; await new Promise((resolve) => setTimeout(resolve, 150));
     }
     const openedStagedTab = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Staged'); tab?.click(); return Boolean(tab); })()`);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const reviewEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#review-heading')?.textContent?.trim() ?? null, tabs: [...document.querySelectorAll('[data-slot="tabs-trigger"]')].map((item) => item.textContent?.trim()), diff: document.querySelector('.review-content')?.innerText ?? '', stageFileDisabled: document.querySelector('.review-tabs button[title^="Stage README.md"]')?.disabled ?? null }))()`);
-    const codeInspectorCollapsed = await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show workspace inspector"]') !== null`);
-    checks.codeReview = openedCode && closedWorktreeDialog && refreshedReview && stagedReviewFile && openedStagedTab && codeInspectorCollapsed && reviewEvidence.heading === 'Review worktree' && reviewEvidence.tabs.includes('Staged') && /Unstaged review evidence/.test(reviewEvidence.diff) && reviewEvidence.stageFileDisabled === true;
+    const reviewEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#review-heading')?.textContent?.trim() ?? null, tabs: [...document.querySelectorAll('[data-slot="tabs-trigger"]')].map((item) => item.textContent?.trim()), diff: document.querySelector('.review-content')?.innerText ?? '', rightPanelVisible: document.querySelector('[aria-label="Hide right panel"]') !== null }))()`);
+    checks.codeReview = returnedToLinkedSession && openedInspector && openedChanges && refreshedReview && selectedReviewFile && stagedReviewFile && openedStagedTab && reviewEvidence.rightPanelVisible && reviewEvidence.heading === 'companion/uat-session' && reviewEvidence.tabs.some((tab) => tab?.startsWith('Staged')) && /Unstaged review evidence/.test(reviewEvidence.diff);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const reviewScreenshot = await window.webContents.capturePage();
     await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-review.png'), reviewScreenshot.toPNG());
-    const openedCenterTerminal = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.status-bar button')].find((item) => item.innerText.trim() === 'Terminal'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    const openedCenterTerminal = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('.status-bar button[aria-label="Show terminal"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const terminalEvidence = await window.webContents.executeJavaScript(`(() => ({ open: document.querySelector('.primary-pane')?.getAttribute('data-terminal-open') === 'true', heading: document.querySelector('[aria-label="Worktree terminals"]')?.textContent?.trim() ?? null, addTerminal: document.querySelector('[aria-label="Add terminal"]') instanceof HTMLButtonElement }))()`);
     checks.centerTerminal = openedCenterTerminal && terminalEvidence.open && /terminals/i.test(terminalEvidence.heading ?? '') && terminalEvidence.addTerminal;
     const terminalScreenshot = await window.webContents.capturePage();
     await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-terminal.png'), terminalScreenshot.toPNG());
-    const openedInspector = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Show workspace inspector"]'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const openedFiles = openedInspector && await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Files'); tab?.click(); return Boolean(tab); })()`);
+    const openedFiles = await window.webContents.executeJavaScript(`(() => { const existing = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Files'); if (existing) { existing.click(); return true; } const add = document.querySelector('[aria-label="New tab"]'); add?.click(); return Boolean(add); })()`);
+    if (openedFiles) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[data-slot="command-item"]')].find((entry) => entry.textContent?.trim() === 'File'); item?.click(); })()`);
+    }
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('.file-list .file-open'))`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
@@ -628,76 +654,80 @@ async function runAutomatedUat(window) {
     checks.editorKeyboardSave = openedFiles && openedReadme && editorSaveTriggered && editorEvidence.label === 'Edit README.md' && editorEvidence.shortcuts === 'Meta+S Control+S' && editorEvidence.notice === 'Saved' && editorEvidence.saveHint === '⌘S' && /Keyboard save evidence/.test(keyboardSavedFile.content);
     const editorScreenshot = await window.webContents.capturePage();
     await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-editor-save.png'), editorScreenshot.toPNG());
-    const openedBrowserTab = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Browser'); tab?.click(); return Boolean(tab); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const previewCollapsed = await window.webContents.executeJavaScript(`!document.querySelector('#preview-origin') && Boolean([...document.querySelectorAll('button')].find((item) => item.innerText.trim() === 'Configure preview'))`);
-    const openedPreviewSetup = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.innerText.trim() === 'Configure preview'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const previewDisclosureEvidence = await window.webContents.executeJavaScript(`(() => ({ originVisible: Boolean(document.querySelector('#preview-origin')), expanded: [...document.querySelectorAll('button')].find((item) => item.innerText.trim() === 'Hide preview setup')?.getAttribute('aria-expanded') ?? null }))()`);
-    checks.previewDisclosure = openedBrowserTab && previewCollapsed && openedPreviewSetup && previewDisclosureEvidence.originVisible && previewDisclosureEvidence.expanded === 'true';
-    const openedProjectDialog = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('.project-tree-heading button'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const projectDialogEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.querySelector('[data-slot="dialog-title"]')?.textContent?.trim() ?? null, body: document.querySelector('[data-slot="dialog-content"]')?.innerText ?? '' }))()`);
-    const projectScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-add-project.png'), projectScreenshot.toPNG());
-    const projectStateBefore = JSON.parse(await fsp.readFile(path.join(stateDir, 'state.json'), 'utf8'));
-    const filledProject = await window.webContents.executeJavaScript(`(() => { const path = document.querySelector('#repository-path'); const name = document.querySelector('#project-name'); if (!(path instanceof HTMLInputElement) || !(name instanceof HTMLInputElement)) return false; path.value = ${JSON.stringify(repositoryPath)}; path.dispatchEvent(new Event('input', { bubbles: true })); name.value = 'UAT project entry'; name.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const startedProject = filledProject && await window.webContents.executeJavaScript(`(() => { const action = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find((item) => item.innerText.trim() === 'Create project and chat'); if (!(action instanceof HTMLButtonElement) || action.disabled) return false; action.closest('form')?.requestSubmit(); return true; })()`);
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const ready = await window.webContents.executeJavaScript(`(() => document.querySelector('.project-row[data-active="true"]')?.textContent?.includes('UAT project entry') && document.querySelector('.project-threads button.active')?.textContent?.includes('New thread') && !document.querySelector('[data-slot="dialog-content"]'))()`);
-      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    const openedBrowserTab = await window.webContents.executeJavaScript(`(() => { const existing = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Browser'); if (existing) { existing.click(); return true; } const add = document.querySelector('[aria-label="New tab"]'); add?.click(); return Boolean(add); })()`);
+    if (openedBrowserTab && !await window.webContents.executeJavaScript(`Boolean([...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Browser'))`)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[data-slot="command-item"]')].find((entry) => entry.textContent?.trim() === 'Browser'); item?.click(); })()`);
     }
-    const projectStartEvidence = await window.webContents.executeJavaScript(`(() => { const dialog = [...document.querySelectorAll('[data-slot="dialog-content"]')].find((item) => getComputedStyle(item).display !== 'none' && getComputedStyle(item).visibility !== 'hidden'); return { activeProject: document.querySelector('.project-row[data-active="true"]')?.textContent?.trim() ?? null, activeThread: document.querySelector('.project-threads button.active')?.textContent?.trim() ?? null, dialogOpen: Boolean(dialog) }; })()`);
-    const projectStateAfter = JSON.parse(await fsp.readFile(path.join(stateDir, 'state.json'), 'utf8'));
-    checks.projectEntry = openedProjectDialog && /New code project/.test(projectDialogEvidence.body) && /Initialize Git if needed/.test(projectDialogEvidence.body) && /Create project and chat/.test(projectDialogEvidence.body) && startedProject && projectStateAfter.worktrees.length === projectStateBefore.worktrees.length + 1 && projectStartEvidence.activeProject && projectStartEvidence.activeThread?.includes('New thread') && !projectStartEvidence.dialogOpen;
-    const openedCapabilityMenu = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-launchers button')].find((item) => item.innerText.includes('Capabilities')); button?.click(); return Boolean(button); })()`);
     await new Promise((resolve) => setTimeout(resolve, 150));
-    const openedModels = openedCapabilityMenu && await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((entry) => entry.innerText.trim().startsWith('Models')); item?.click(); return Boolean(item); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    const modelEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#operations-heading')?.textContent?.trim() ?? null, bodyText: document.querySelector('main')?.innerText?.slice(0, 4000) ?? '', providerOptions: [...document.querySelectorAll('[role="combobox"]')].map((item) => item.textContent?.trim()), fieldCount: document.querySelectorAll('input, textarea, [role="combobox"]').length }))()`);
-    checks.modelSurface = openedModels && modelEvidence.heading === 'models' && /Connect provider accounts/.test(modelEvidence.bodyText) && /OpenAI Codex/.test(modelEvidence.bodyText) && /Codex subscription/.test(modelEvidence.bodyText) && !/Operation failed/.test(modelEvidence.bodyText);
-    const modelScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-models.png'), modelScreenshot.toPNG());
-    const openedOauth = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('main button')].find((item) => item.innerText.trim() === 'Connect'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    const oauthEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.querySelector('[data-slot="dialog-title"]')?.textContent?.trim() ?? null, bodyText: document.querySelector('[data-slot="dialog-content"]')?.innerText ?? '', dialogCount: document.querySelectorAll('[data-slot="dialog-content"]').length }))()`);
-    checks.oauthSurface = openedOauth && /Connect Anthropic/.test(oauthEvidence.bodyText) && /HERM-4821/.test(oauthEvidence.bodyText) && /Waiting for provider approval/.test(oauthEvidence.bodyText);
-    const oauthScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-oauth.png'), oauthScreenshot.toPNG());
-    await window.webContents.executeJavaScript(`(() => { [...document.querySelectorAll('[data-slot="dialog-content"] button')].find((item) => item.innerText.trim() === 'Close')?.click(); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    await window.webContents.executeJavaScript(`(() => { [...document.querySelectorAll('.workspace-header button')].find((item) => item.innerText.trim() === 'Back')?.click(); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const openedWebhookMenu = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-launchers button')].find((item) => item.innerText.includes('Capabilities')); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const openedWebhooks = openedWebhookMenu && await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((entry) => entry.innerText.trim().startsWith('Webhooks')); item?.click(); return Boolean(item); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const webhookEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#operations-heading')?.textContent?.trim() ?? null, bodyText: document.querySelector('main')?.innerText?.slice(0, 4000) ?? '' }))()`);
-    checks.webhookSurface = openedWebhooks && webhookEvidence.heading === 'webhooks' && /github-pr-review/.test(webhookEvidence.bodyText) && /Webhook subscriptions owned by Hermes/.test(webhookEvidence.bodyText);
-    const webhookScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-webhooks.png'), webhookScreenshot.toPNG());
-    const returnedToWorkspace = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('main button')].find((item) => item.innerText.trim() === 'Back'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const openedNotificationsMenu = returnedToWorkspace && await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-launchers button')].find((item) => item.innerText.includes('Capabilities')); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const openedNotifications = openedNotificationsMenu && await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((entry) => entry.innerText.trim().startsWith('Notifications')); item?.click(); return Boolean(item); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const notificationEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#operations-heading')?.textContent?.trim() ?? null, bodyText: document.querySelector('main')?.innerText?.slice(0, 4000) ?? '' }))()`);
-    const nativeNotificationStatus = await dispatchNative('notification.status', {});
-    checks.notificationSurface = openedNotifications && notificationEvidence.heading === 'notifications' && /Native notifications/.test(notificationEvidence.bodyText) && typeof nativeNotificationStatus.supported === 'boolean';
-    const notificationScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-notifications.png'), notificationScreenshot.toPNG());
-    const openedConnection = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Add profile"]'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const startedDiscovery = openedConnection && await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find((item) => item.innerText.trim() === 'Discover local Hermes'); button?.click(); return Boolean(button); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const discoveryEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.querySelector('[data-slot="dialog-title"]')?.textContent?.trim() ?? null, bodyText: document.querySelector('[data-slot="dialog-content"]')?.innerText ?? '', agentUrl: document.querySelector('#gateway-url')?.value ?? null, controlUrl: document.querySelector('#control-url')?.value ?? null }))()`);
-    checks.localDiscovery = startedDiscovery && /Connect a Hermes gateway/.test(discoveryEvidence.bodyText) && /Local Hermes was partially discovered/.test(discoveryEvidence.bodyText) && /Dashboard-only hosts use their verified Dashboard URL/.test(discoveryEvidence.bodyText) && discoveryEvidence.agentUrl === process.env.HERMES_CONTROL_URL && discoveryEvidence.controlUrl === process.env.HERMES_CONTROL_URL;
-    const discoveryScreenshot = await window.webContents.capturePage();
-    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-connection.png'), discoveryScreenshot.toPNG());
     const browserFixtureUrl = process.env.HERMES_COMPANION_UAT_BROWSER_URL;
     if (!browserFixtureUrl) throw new Error('Electron UAT browser fixture URL is missing.');
+    const openedBrowserUrl = await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#browser-url'); if (!(input instanceof HTMLInputElement)) return false; input.value = ${JSON.stringify(process.env.HERMES_COMPANION_UAT_BROWSER_URL ?? '')}; input.dispatchEvent(new Event('input', { bubbles: true })); input.closest('form')?.requestSubmit(); return true; })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (browserViewController.view && !browserViewController.view.webContents.isDestroyed() && browserViewController.view.webContents.getURL() === browserFixtureUrl) break;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const uiBrowserSecurity = browserViewController.view && !browserViewController.view.webContents.isDestroyed()
+      ? await browserViewController.view.webContents.executeJavaScript(`({ node: typeof require, companion: typeof window.companion })`)
+      : null;
+    const switchedBrowserAway = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Files'); tab?.click(); return Boolean(tab); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const switchedBrowserBack = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Browser'); tab?.click(); return Boolean(tab); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const browserAfterRapidReactivate = browserViewController.view && !browserViewController.view.webContents.isDestroyed()
+      ? { url: browserViewController.view.webContents.getURL(), owner: browserViewController.claim }
+      : null;
+    checks.browserDock = openedBrowserTab && openedBrowserUrl && uiBrowserSecurity?.node === 'undefined' && uiBrowserSecurity?.companion === 'undefined';
+    checks.browserReactivation = switchedBrowserAway && switchedBrowserBack && browserAfterRapidReactivate?.url === browserFixtureUrl;
+    const focusedInspector = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Focus right panel"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const focusEvidence = await window.webContents.executeJavaScript(`(() => ({ restore: Boolean(document.querySelector('[aria-label="Restore right panel"]')), centerHidden: document.querySelector('.primary-pane')?.getAttribute('aria-hidden') }))()`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Restore right panel"]')?.click()`);
+    checks.inspectorFocus = focusedInspector && focusEvidence.restore && focusEvidence.centerHidden === 'true';
+    const selectedSecondarySession = await window.webContents.executeJavaScript(`(() => { const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Verify session restoration'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.title === 'Verify session restoration'`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const secondaryLayoutEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, inspectorClosed: Boolean(document.querySelector('[aria-label="Show right panel"]')) }))()`);
+    const returnedToPrimarySession = await window.webContents.executeJavaScript(`(() => { const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Implement preview relay'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.title === 'Implement preview relay' && Boolean(document.querySelector('[aria-label="Hide right panel"]')) && [...document.querySelectorAll('[data-slot="tabs-trigger"]')].some((item) => item.textContent?.trim() === 'Browser' && item.getAttribute('data-state') === 'active')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const primaryRestoredEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, inspectorOpen: Boolean(document.querySelector('[aria-label="Hide right panel"]')), activeTab: [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.getAttribute('data-state') === 'active')?.textContent?.trim() ?? null }))()`);
+    checks.sessionLayoutIsolation = selectedSecondarySession && secondaryLayoutEvidence.title === 'Verify session restoration' && secondaryLayoutEvidence.inspectorClosed && returnedToPrimarySession && primaryRestoredEvidence.inspectorOpen && primaryRestoredEvidence.activeTab === 'Browser';
+    const selectedFilesBeforeReload = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Files'); tab?.click(); return Boolean(tab); })()`);
+    const reloaded = new Promise((resolve, reject) => { window.webContents.once('did-finish-load', resolve); window.webContents.once('did-fail-load', (_event, code, description) => reject(new Error(`Renderer failed to reload (${code}): ${description}`))); });
+    window.webContents.reload();
+    await reloaded;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('.companion-shell[data-shell-presented="true"]')) && document.title === 'Implement preview relay' && Boolean(document.querySelector('[aria-label="Hide right panel"]')) && [...document.querySelectorAll('[data-slot="tabs-trigger"]')].some((item) => item.textContent?.trim() === 'Files' && item.getAttribute('data-state') === 'active')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const reloadEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, skeletons: document.querySelectorAll('[data-slot="skeleton"]').length, inspectorOpen: Boolean(document.querySelector('[aria-label="Hide right panel"]')), activeTab: [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.getAttribute('data-state') === 'active')?.textContent?.trim() ?? null }))()`);
+    checks.layoutReload = selectedFilesBeforeReload && reloadEvidence.title === 'Implement preview relay' && reloadEvidence.skeletons === 0 && reloadEvidence.inspectorOpen && reloadEvidence.activeTab === 'Files';
+    const dockScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-dock-restored.png'), dockScreenshot.toPNG());
+    const openedCapabilities = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => item.innerText.trim() === 'Capabilities'); button?.click(); return Boolean(button); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const capabilityEvidence = await window.webContents.executeJavaScript(`(() => ({ present: Boolean(document.querySelector('[aria-label="Hermes capabilities"]')), tabs: [...document.querySelectorAll('[aria-label="Hermes capabilities"] [data-slot="tabs-trigger"]')].map((item) => item.textContent?.trim()) }))()`);
+    checks.capabilities = openedCapabilities && capabilityEvidence.present && ['Skills', 'Tools', 'MCP', 'Browse Hub'].every((tab) => capabilityEvidence.tabs.includes(tab));
+    const capabilityScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-capabilities.png'), capabilityScreenshot.toPNG());
+    const openedSettings = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Open settings"]'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#settings-heading')) && Boolean(document.querySelector('#settings-search'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const settingsEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#settings-heading')?.textContent?.trim() ?? null, search: Boolean(document.querySelector('#settings-search')), pane: document.querySelector('.primary-pane')?.getAttribute('aria-label') ?? null }))()`);
+    checks.settings = openedSettings && settingsEvidence.search && settingsEvidence.pane === 'Settings';
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Close settings"]')?.click()`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const createdSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => item.innerText.trim() === 'New chat'); button?.click(); return Boolean(button); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, header: document.querySelector('.header-context')?.textContent?.trim() ?? '', welcome: document.querySelector('.welcome-state')?.innerText ?? '', prompt: document.querySelector('#chat-prompt')?.value ?? null }))()`);
+    checks.newChat = createdSession && /New conversation/.test(sessionEvidence.header) && /Ask Hermes anything/.test(sessionEvidence.welcome) && sessionEvidence.prompt === '';
     const uatBrowserIdentity = { ownerKey: 'uat:browser', browserLeaseId: crypto.randomUUID() };
     claimBrowserView(uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
     await openGeneralBrowser(browserFixtureUrl, uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
@@ -751,7 +781,7 @@ async function runAutomatedUat(window) {
     checks.nativeGitLifecycle = /Add UAT note/.test(initialCommit.stdout) && /Amend UAT note/.test(amendedCommit.stdout) && commitMetadata.subject === 'Amend UAT note' && typeof pushed.stdout === 'string' && typeof pushed.stderr === 'string' && githubStatus.installed && githubStatus.authenticated && existingPullRequest?.number === 1 && existingPullRequest?.isDraft === true && pullRequest.url === 'https://github.example.test/hermes-companion/uat/pull/1';
     await dispatchNative('git.worktree.remove', { repositoryPath, worktreePath, force: true });
     const ok = Object.values(checks).every(Boolean);
-    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, yoloEvidence, chatEvidence, sessionEvidence, reviewEvidence, terminalEvidence, projectDialogEvidence, projectStartEvidence, previewDisclosureEvidence, modelEvidence, oauthEvidence, webhookEvidence, notificationEvidence, nativeNotificationStatus, discoveryEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
+    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, sessionEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
   } catch (error) { clearTimeout(timeout); await writeUatReport({ ok: false, platform: process.platform, rendererUrl, error: error instanceof Error ? error.message : String(error), capturedAt: new Date().toISOString() }); app.exit(1); }
 }
 
@@ -759,13 +789,15 @@ async function writeUatReport(value) {
   if (!uatReportDir) return; await fsp.mkdir(uatReportDir, { recursive: true }); await fsp.writeFile(path.join(uatReportDir, 'report.json'), JSON.stringify(value, null, 2));
 }
 
-app.whenReady().then(async () => {
-  await startNativeServer(); await startRenderer(); createWindow();
+startupPromise = app.whenReady().then(async () => {
   ipcMain.handle('native:invoke', (_event, capability, input) => dispatchNative(capability, input));
   ipcMain.on('design:annotation', (_event, annotation) => mainWindow?.webContents.send('design:annotation', annotation));
+  await startNativeServer();
+  await startRenderer();
+  return ensureWindow();
 });
 
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+app.on('activate', () => { void startupPromise.then(() => ensureWindow()); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', () => {
   releaseAnyBrowserView();

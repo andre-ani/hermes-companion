@@ -35,13 +35,13 @@ describe('companion bridge', () => {
     const { root, repo, bridge } = await fixture();
     const existing = join(root, 'existing-worktree');
     await exec('git', ['worktree', 'add', '-b', 'feature/existing', existing, 'HEAD'], { cwd: repo });
-    const payload = { action: 'worktree.attach', projectId: 'p-1', repositoryPath: repo, worktreePath: existing, threadId: 'session-existing', branch: 'feature/existing' } as const;
+    const payload = { action: 'worktree.attach', connectionId: 'railway', profileId: 'code', projectId: 'p-1', repositoryPath: repo, worktreePath: existing, threadId: 'session-existing', branch: 'feature/existing' } as const;
     const first = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload }) as { worktreeId: string; path: string };
     const second = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload }) as { worktreeId: string; path: string };
     expect(second).toEqual(first);
     await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { ...payload, threadId: 'another-session' } })).rejects.toThrow('another Hermes session');
     await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.detach', worktreeId: first.worktreeId } });
-    const listed = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.list', projectId: 'p-1' } }) as Array<{ worktreeId: string }>;
+    const listed = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.list', connectionId: 'railway', profileId: 'code', projectId: 'p-1' } }) as Array<{ worktreeId: string }>;
     expect(listed).toEqual([]);
   });
 

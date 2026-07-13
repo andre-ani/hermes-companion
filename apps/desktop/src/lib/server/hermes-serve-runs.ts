@@ -330,6 +330,13 @@ export class HermesServeRunManager {
       }
     );
     run = { id, input, owner: { connectionId: connection.id, profileId }, status: 'starting', events: [], socket, persistedSessionId: null, transportSessionId: null, baselineMessageCount: 0, assistantText: '', promptDispatched: false, released: false, streamedText: false, pendingApproval: null, recoveryTimer: null, recoveryProbeInFlight: false };
+    const ownedWorktree = await this.repository.getWorktree(input.worktree.worktreeId, connection.id, profileId);
+    if (!ownedWorktree
+      || ownedWorktree.projectId !== input.worktree.projectId
+      || ownedWorktree.path !== input.worktree.path
+      || ownedWorktree.branch !== input.worktree.branch) {
+      throw new Error('The Hermes run worktree does not belong to the requested connection and profile.');
+    }
     try { await this.repository.acquireWriter(input.worktree.worktreeId, { id, worktreeId: input.worktree.worktreeId, harness: 'hermes', status: 'starting', startedAt: new Date().toISOString(), finishedAt: null }); }
     catch (error) { throw error; }
     this.runs.set(id, run); this.emit(run, { type: 'status', status: 'starting' });

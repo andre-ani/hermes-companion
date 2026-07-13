@@ -10,7 +10,7 @@
 
   type TerminalSession = { id: string; label: string; output: string; closed: boolean };
 
-  let { worktree, oncollapse, layout = 'bottom' }: { worktree: WorktreeRecord | null; oncollapse?: () => void; layout?: 'bottom' | 'sidebar' } = $props();
+  let { worktree, unavailableReason, oncollapse, layout = 'bottom' }: { worktree: WorktreeRecord | null; unavailableReason?: string | null; oncollapse?: () => void; layout?: 'bottom' | 'sidebar' } = $props();
   let sessions = $state<TerminalSession[]>([]);
   let activeTerminalId = $state<string | null>(null);
   let opening = $state(false);
@@ -125,7 +125,7 @@
   {#if activeTerminal}
     <textarea class="terminal-output" bind:this={terminalView} readonly aria-label={`${activeTerminal.label} output; type to send input`} value={activeTerminal.output || 'Terminal connected.\n'} onkeydown={sendKey}></textarea>
   {:else}
-    <Empty.Root class="terminal-empty"><Empty.Header><Empty.Media variant="icon"><SquareTerminal /></Empty.Media><Empty.Title>No terminal open</Empty.Title><Empty.Description>{worktree ? 'Open a shell scoped to this coding-thread worktree.' : 'Select a coding thread worktree to open a shell.'}</Empty.Description></Empty.Header><Empty.Content><Button size="sm" disabled={!worktree || opening} onclick={addTerminal}><Plus data-icon="inline-start" /> {opening ? 'Opening…' : 'Open terminal'}</Button></Empty.Content></Empty.Root>
+    <Empty.Root class="terminal-empty"><Empty.Header><Empty.Media variant="icon"><SquareTerminal /></Empty.Media><Empty.Title>No terminal open</Empty.Title><Empty.Description>{worktree ? 'Open a shell scoped to this coding-thread worktree.' : unavailableReason ?? 'Select a coding thread worktree to open a shell.'}</Empty.Description></Empty.Header><Empty.Content><Button size="sm" disabled={!worktree || opening} onclick={addTerminal}><Plus data-icon="inline-start" /> {opening ? 'Opening…' : 'Open terminal'}</Button></Empty.Content></Empty.Root>
   {/if}
 
   <footer class="terminal-tabs" aria-label="Terminal sessions">

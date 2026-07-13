@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import * as CommandMenu from '$lib/components/ui/command';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Alert from '$lib/components/ui/alert';
@@ -33,18 +33,20 @@
   import ModelProvenance from '$lib/components/companion/model-provenance.svelte';
   import { getWorkspaceOverview, selectHermesProfile } from '$lib/client/remote/gateway.remote';
   import { getSessionContextUsage, getSessionMessages, searchSessions, sendChatMessage, setSessionArchived, setSessionUnread } from '$lib/client/remote/sessions.remote';
-  import { bindHermesProjectWorktree, getProjectSessions, setProjectArchived } from '$lib/client/remote/projects.remote';
+  import { bindHermesProjectWorktree, getProjectSessions, resolveSessionWorkspaceTarget, setProjectArchived } from '$lib/client/remote/projects.remote';
   import { getProfileUiPreferences, setProfileUiPreferences, setSessionPinned } from '$lib/client/remote/profile-ui.remote';
   import { runHermesMaintenance, setHermesApprovalMode } from '$lib/client/remote/operations.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import { setBrowserFullscreen } from '$lib/client/remote/browser.remote';
   import { getDesktopSettings, getOpenRouterPolicy } from '$lib/client/remote/settings.remote';
+  import { adoptWorkspaceLayout, deleteWorkspaceLayout, getWorkspaceLayout, setWorkspaceLayout } from '$lib/client/remote/workspace-layout.remote';
+  import { clearWorkspaceLayoutJournal, readWorkspaceLayoutJournal, writeWorkspaceLayoutJournal } from '$lib/client/workspace-layout-journal';
   import { settingsSections } from '$lib/settings/settings-registry';
   import { modelSelectionKey } from '$lib/model-identity';
   import { applyOpenRouterPolicy } from '$lib/openrouter-policy';
   import { errorMessage } from '$lib/error-message';
   import { SerializedSelectionQueue, ViewOwnership, viewResourceKey, type ViewOwner } from '$lib/view-ownership';
-  import type { CapabilityAvailability, CapabilityFamily, ChatAttachmentInput, ChatTurnApproval, ChatTurnSnapshot, ContextUsage, DesktopPreferences, GatewayStatus, HermesGitWorktree, HermesMessage, HermesProfile, HermesProjectTree, HermesProjectTreeNode, HermesSession, ModelInfo, OpenRouterPolicyOverview, ProfileUiPreferences, ProjectBinding, SessionPresentation, SessionTreeFilter, WorktreeRecord } from '@hermes-companion/contracts';
+  import { workspaceLayoutOwnerKey, WorkspaceLayoutPreferences, type CapabilityAvailability, type CapabilityFamily, type ChatAttachmentInput, type ChatTurnApproval, type ChatTurnSnapshot, type ContextUsage, type DesktopPreferences, type GatewayStatus, type HermesGitWorktree, type HermesMessage, type HermesProfile, type HermesProjectTree, type HermesProjectTreeNode, type HermesSession, type ModelInfo, type OpenRouterPolicyOverview, type ProfileUiPreferences, type ProjectBinding, type SessionPresentation, type SessionTreeFilter, type WorkspaceDockTab, type WorkspaceLayoutOwner, type WorktreeRecord } from '@hermes-companion/contracts';
   import { ArrowLeft, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Command as CommandIcon, FolderGit2, GitCommitHorizontal, GitPullRequest, KeyRound, Maximize2, MessageCircle, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RotateCcw, RotateCw, Search, Server, Settings, Shapes, ShieldCheck, Sparkles, SquarePen, SquareTerminal, Stethoscope, Timer, Upload, Wifi, Wrench } from '@lucide/svelte';
 
   type Overview = { gateway: GatewayStatus; capabilities: CapabilityAvailability[]; connections: GatewayStatus['connection'][]; profiles: HermesProfile[]; activeProfileId: string; sessions: HermesSession[]; models: ModelInfo[]; projects: ProjectBinding[]; projectTree: HermesProjectTree; worktrees: WorktreeRecord[]; pinnedSessionIds: string[]; audit: Array<{ id: string; action: string; subject: string; at: string }>; approvalMode: 'manual' | 'smart' | 'off' | null };
@@ -90,19 +92,30 @@
   let selectedProjectId = $state<string | null>(null);
   let nativePlatform = $state('');
   type InspectorMode = 'docked' | 'focused';
-  type InspectorSessionState = { visible: boolean; mode: InspectorMode; tab: string; tabs: string[] };
-  let dockTab = $state('surfaces');
-  let dockTabs = $state<string[]>([]);
+  let dockTab = $state<WorkspaceDockTab>('surfaces');
+  let dockTabs = $state<Array<Exclude<WorkspaceDockTab, 'surfaces'>>>([]);
   let inspectorVisible = $state(false);
   let inspectorMode = $state<InspectorMode>('docked');
-  let inspectorOwner = $state('profile:none:new');
   let browserLeaseId = $state(crypto.randomUUID());
-  let inspectorSessionState = $state<Record<string, InspectorSessionState>>({});
+  let browserSurfaceActive = false;
   let inspectorWidth = $state(480);
   let clock = $state(Date.now());
   let approvalPending = $state(false);
   let terminalOpen = $state(false);
   let terminalHeight = $state(260);
+  let activeDraftId = $state<string | null>(crypto.randomUUID());
+  let workspaceLayoutReady = $state(false);
+  let workspaceLayoutApplying = $state(false);
+  let workspaceLayoutHydratedKey = $state('');
+  let workspaceLayoutHydrationGeneration = 0;
+  const pendingWorkspaceLayouts = new Map<string, { owner: WorkspaceLayoutOwner; preferences: WorkspaceLayoutPreferences }>();
+  const workspaceLayoutSaveQueues = new Map<string, Promise<void>>();
+  const workspaceLayoutOwnerRedirects = new Map<string, WorkspaceLayoutOwner>();
+  const deletedWorkspaceLayoutKeys = new Set<string>();
+  let workspaceLayoutResizeActive = $state(false);
+  let workspaceTargetHydratedKey = $state('');
+  let resolvedWorkspaceTarget = $state<{ key: string; worktree: WorktreeRecord | null; reason: string | null } | null>(null);
+  let workspaceTargetHydrationGeneration = 0;
   let terminalSplit = $state<{ runCommand: (command: string) => Promise<boolean> } | null>(null);
   let sessionPresentation = $state<SessionPresentation>('chats');
   let profileUiPreferences = $state<ProfileUiPreferences | null>(null);
@@ -127,13 +140,13 @@
   type RendererTurnState = { owner: TurnOwner; approval: (ChatTurnApproval & { requestId: string }) | null; approvalPending: boolean };
   let activeTurns = $state<Record<string, RendererTurnState>>({});
   const viewOwnership = new ViewOwnership();
+  let visibleViewOwner = $state<ViewOwner | null>(null);
   let workspaceLoadGeneration = 0;
   let profileSelectionTargetId: string | null = null;
   const profileSelections = new SerializedSelectionQueue<string>();
   let profileUiLoadGeneration = 0;
   let profileUiSaveGeneration = 0;
 
-  const activeProject = $derived(overview?.projects.find((project) => project.id === selectedProjectId) ?? null);
   const workspaceStarting = $derived(loading && overview === null);
   const activeSession = $derived.by(() => {
     const current = overview;
@@ -141,43 +154,76 @@
     return current.sessions.find((session) => session.id === activeSessionId
       && (session.profileId ?? current.activeProfileId) === current.activeProfileId) ?? null;
   });
-  const activeWorktree = $derived(overview?.worktrees.find((worktree) => worktree.threadId === activeSessionId && worktree.projectId === activeProject?.id) ?? null);
+  const activeProject = $derived.by(() => {
+    const current = overview;
+    return current?.projects.find((project) => project.connectionId === current.gateway.connection.id && project.id === (selectedProjectId ?? activeSession?.projectId)) ?? null;
+  });
+  const sessionWorkspaceResolution = $derived.by(() => {
+    if (!activeSession) return { request: null, key: '', reason: activeProject ? 'Send a message from a linked worktree before opening coding surfaces.' : 'Select a project session to open coding surfaces.' };
+    if (!activeProject) return { request: null, key: '', reason: 'This Hermes session is not linked to a project.' };
+    const connectionId = overview?.gateway.connection.id;
+    const profileId = activeSession.profileId;
+    if (!connectionId || !profileId || !activeSession.cwd || !activeSession.branch) {
+      return { request: null, key: '', reason: 'Hermes did not provide a complete workspace identity for this session.' };
+    }
+    const request = {
+      connectionId,
+      profileId,
+      projectId: activeProject.id,
+      repositoryPath: activeProject.repositoryPath,
+      worktreePath: activeSession.cwd,
+      branch: activeSession.branch,
+      sessionId: activeSession.id
+    };
+    return { request, key: JSON.stringify([connectionId, profileId, activeSession.id, activeProject.id, activeProject.repositoryPath, activeSession.cwd, activeSession.branch, overview?.gateway.checkedAt]), reason: null };
+  });
+  const activeWorktree = $derived(resolvedWorkspaceTarget?.key === sessionWorkspaceResolution.key ? resolvedWorkspaceTarget.worktree : null);
+  const workspaceTargetReady = $derived(!sessionWorkspaceResolution.request || workspaceTargetHydratedKey === sessionWorkspaceResolution.key);
+  const workspaceUnavailableReason = $derived(resolvedWorkspaceTarget?.key === sessionWorkspaceResolution.key
+    ? resolvedWorkspaceTarget.reason
+    : sessionWorkspaceResolution.reason ?? 'Verifying this session worktree with Hermes…');
   // A session remains a conversation even when it is attached to a worktree.
   // Project ownership enriches the composer; it does not silently replace the
   // conversation with a different-sized editor.
   const workspaceIsProjectScoped = $derived(Boolean(activeProject && !activeSessionId));
-  const inspectorOwnerKey = $derived(`${overview?.activeProfileId ?? 'profile:none'}:${activeSessionId ?? (selectedProjectId ? `project:${selectedProjectId}` : 'new')}`);
+  const workspaceLayoutIdentity = $derived.by((): WorkspaceLayoutOwner | null => {
+    const owner = visibleViewOwner;
+    if (!owner?.connectionId || !owner.profileId || owner.sessionId !== activeSessionId || owner.draftId !== activeDraftId) return null;
+    if (owner.sessionId) return { connectionId: owner.connectionId, profileId: owner.profileId, resource: { kind: 'session', id: owner.sessionId } };
+    if (owner.draftId) return { connectionId: owner.connectionId, profileId: owner.profileId, resource: { kind: 'draft', id: owner.draftId } };
+    return null;
+  });
+  const inspectorOwnerKey = $derived(workspaceLayoutIdentity ? workspaceLayoutOwnerKey(workspaceLayoutIdentity) : 'workspace:none');
+  const workspaceLayoutInteractive = $derived(Boolean(workspaceLayoutIdentity && workspaceLayoutHydratedKey === inspectorOwnerKey && !workspaceLayoutApplying));
+
+  function synchronizeBrowserSurfaceLease(active: boolean) {
+    // A release crosses the renderer/native boundary and may finish after the
+    // Browser tab has reopened. Give every visible activation a new lease so
+    // teardown captured by the previous activation can never close its view.
+    if (active && !browserSurfaceActive) browserLeaseId = crypto.randomUUID();
+    browserSurfaceActive = active;
+  }
+
+  $effect(() => {
+    synchronizeBrowserSurfaceLease(Boolean(workspaceLayoutInteractive && inspectorVisible && dockTab === 'browser'));
+  });
   const activeWorkspaceBranch = $derived(activeWorktree
     ? { id: activeWorktree.worktreeId, branch: activeWorktree.branch }
-    : draftWorktree
+    : !activeSessionId && draftWorktree
       ? { id: draftWorktree.path, branch: draftWorktree.branch ?? 'detached' }
-      : activeSession?.cwd
-        ? { id: activeSession.cwd, branch: activeSession.branch ?? 'workspace' }
-        : null);
+      : null);
   const activeComposerProjectContext = $derived(activeProject && activeWorkspaceBranch
     ? { id: activeProject.id, name: activeProject.name, branchId: activeWorkspaceBranch.id, branch: activeWorkspaceBranch.branch }
     : null);
-  const activeGitWorkspace = $derived(activeProject
+  const activeGitWorkspace = $derived(activeProject && (activeWorktree || (!activeSessionId && draftWorktree))
     ? {
         projectId: activeProject.id,
         repositoryPath: activeProject.repositoryPath,
-        path: draftWorktree?.path ?? activeWorktree?.path ?? activeSession?.cwd ?? activeProject.repositoryPath,
-        branch: draftWorktree?.branch ?? activeWorktree?.branch ?? activeSession?.branch ?? activeProject.defaultBranch
+        path: activeWorktree?.path ?? draftWorktree!.path,
+        branch: activeWorktree?.branch ?? draftWorktree!.branch ?? activeProject.defaultBranch
       }
     : null);
 
-  $effect(() => {
-    const owner = inspectorOwnerKey;
-    if (owner === inspectorOwner) return;
-    inspectorSessionState[inspectorOwner] = { visible: inspectorVisible, mode: inspectorMode, tab: dockTab, tabs: [...dockTabs] };
-    inspectorOwner = owner;
-    browserLeaseId = crypto.randomUUID();
-    const next = inspectorSessionState[owner] ?? { visible: false, mode: 'docked' as const, tab: 'surfaces', tabs: [] };
-    inspectorVisible = next.visible;
-    inspectorMode = next.mode;
-    dockTab = next.tab;
-    dockTabs = [...next.tabs];
-  });
   const composerAvailable = $derived(Boolean(overview?.gateway.connection.serveUrl || overview?.gateway.connection.serveWsUrl));
   const gatewayTone = $derived(overview?.gateway.status === 'enhanced' || overview?.gateway.status === 'connected' ? 'positive' : overview?.gateway.status === 'partial' ? 'warning' : 'negative');
   const approvalMode = $derived(overview?.approvalMode ?? null);
@@ -254,12 +300,51 @@
     { id: 'project-review', label: 'Review a project', description: 'Use @ to attach a project or profile', prompt: 'Review @' },
     { id: 'automation', label: 'Create an automation', description: 'Design a recurring Hermes job', prompt: 'Design a recurring automation that ' }
   ];
-  const composerBranchOptions = $derived((overview?.worktrees ?? []).filter((worktree) => worktree.projectId === activeProject?.id).map((worktree) => ({ id: worktree.worktreeId, label: worktree.branch, description: overview?.sessions.find((session) => session.id === worktree.threadId)?.title ?? worktree.path })));
+  const composerBranchOptions = $derived((overview?.worktrees ?? []).filter((worktree) => worktree.connectionId === overview?.gateway.connection.id && worktree.profileId === overview?.activeProfileId && worktree.projectId === activeProject?.id).map((worktree) => ({ id: worktree.worktreeId, label: worktree.branch, description: overview?.sessions.find((session) => session.id === worktree.threadId)?.title ?? worktree.path })));
+
+  $effect(() => {
+    const resolution = sessionWorkspaceResolution;
+    if (!resolution.request) {
+      workspaceTargetHydrationGeneration += 1;
+      workspaceTargetHydratedKey = '';
+      resolvedWorkspaceTarget = null;
+      return;
+    }
+    if (workspaceTargetHydratedKey === resolution.key) return;
+    // Remote command state is not an input to this effect. Tracking it would
+    // make the request invalidate and restart itself before it can commit.
+    untrack(() => void hydrateSessionWorkspaceTarget(resolution.request!, resolution.key));
+  });
+
+  $effect(() => {
+    const owner = workspaceLayoutIdentity;
+    if (!owner) {
+      workspaceLayoutReady = !workspaceStarting;
+      return;
+    }
+    // The owner is the dependency; the query lifecycle started by hydration
+    // is not. Keep request-state updates from recursively restarting it.
+    untrack(() => void hydrateWorkspaceLayout(owner));
+  });
+
+  $effect(() => {
+    const owner = workspaceLayoutIdentity;
+    const preferences = WorkspaceLayoutPreferences.parse({
+      inspector: { visible: inspectorVisible, mode: inspectorMode, activeTab: dockTab, openTabs: [...dockTabs], width: inspectorWidth },
+      terminal: { visible: terminalOpen, height: terminalHeight }
+    });
+    if (!owner || workspaceLayoutApplying || workspaceLayoutResizeActive || workspaceLayoutHydratedKey !== workspaceLayoutOwnerKey(owner)) return;
+    queueWorkspaceLayoutPersistence(owner, preferences);
+  });
 
   // The first visible frame is either the boot surface or a fully measured
   // shell. Never expose shell children while their tracks are still resolving.
   $effect(() => {
-    if (workspaceStarting || shellPresented) return;
+    // Worktree verification protects coding surfaces, but it is not part of
+    // conversation-shell readiness. A slow or unavailable execution host must
+    // never strand chat behind the boot surface; workspace controls remain
+    // withheld until the verified target resolves.
+    if (workspaceStarting || !workspaceLayoutReady || shellPresented) return;
     let cancelled = false;
     // Electron may suspend animation frames while a window is backgrounded.
     // A visual transition must never become a prerequisite for app readiness.
@@ -290,6 +375,218 @@
 
   function capabilityFor(family: CapabilityFamily) { return overview?.capabilities.find((item) => item.family === family) ?? null; }
 
+  async function hydrateSessionWorkspaceTarget(
+    request: NonNullable<typeof sessionWorkspaceResolution.request>,
+    key: string
+  ) {
+    const generation = ++workspaceTargetHydrationGeneration;
+    workspaceTargetHydratedKey = '';
+    resolvedWorkspaceTarget = null;
+    try {
+      const target = await resolveRemoteResult(resolveSessionWorkspaceTarget(request));
+      if (generation !== workspaceTargetHydrationGeneration || sessionWorkspaceResolution.key !== key) return;
+      resolvedWorkspaceTarget = target.available
+        ? { key, worktree: target.worktree, reason: null }
+        : { key, worktree: null, reason: target.reason };
+      workspaceTargetHydratedKey = key;
+      if (target.available && overview) {
+        overview = {
+          ...overview,
+          worktrees: [
+            target.worktree,
+            ...overview.worktrees.filter((item) => item.worktreeId !== target.worktree.worktreeId && !(item.connectionId === target.worktree.connectionId && item.profileId === target.worktree.profileId && item.projectId === target.worktree.projectId && item.threadId === target.worktree.threadId))
+          ]
+        };
+      }
+    } catch (cause) {
+      if (generation !== workspaceTargetHydrationGeneration || sessionWorkspaceResolution.key !== key) return;
+      resolvedWorkspaceTarget = { key, worktree: null, reason: errorMessage(cause, 'Hermes could not verify this session worktree.') };
+      workspaceTargetHydratedKey = key;
+    }
+  }
+
+  function snapshotWorkspaceLayout() {
+    return WorkspaceLayoutPreferences.parse({
+      inspector: { visible: inspectorVisible, mode: inspectorMode, activeTab: dockTab, openTabs: [...dockTabs], width: inspectorWidth },
+      terminal: { visible: terminalOpen, height: terminalHeight }
+    });
+  }
+
+  function layoutOwnerForIdentity(identity: Pick<ViewOwner, 'connectionId' | 'profileId' | 'sessionId' | 'draftId'> | null): WorkspaceLayoutOwner | null {
+    if (!identity?.connectionId || !identity.profileId) return null;
+    if (identity.sessionId) return { connectionId: identity.connectionId, profileId: identity.profileId, resource: { kind: 'session', id: identity.sessionId } };
+    if (identity.draftId) return { connectionId: identity.connectionId, profileId: identity.profileId, resource: { kind: 'draft', id: identity.draftId } };
+    return null;
+  }
+
+  function layoutOwnerForView(owner: ViewOwner | null) {
+    return layoutOwnerForIdentity(owner);
+  }
+
+  function workspaceLayoutOwnerKeyOrNull(owner: WorkspaceLayoutOwner | null) {
+    return owner ? workspaceLayoutOwnerKey(owner) : null;
+  }
+
+  function prepareWorkspaceLayoutOwnerTransition(outgoingOwner: WorkspaceLayoutOwner | null) {
+    if (outgoingOwner && workspaceLayoutHydratedKey === workspaceLayoutOwnerKey(outgoingOwner)) {
+      queueWorkspaceLayoutPersistence(outgoingOwner, snapshotWorkspaceLayout());
+    }
+    const outgoingOwnerKey = workspaceLayoutOwnerKeyOrNull(outgoingOwner) ?? 'workspace:none';
+    const outgoingLeaseId = browserLeaseId;
+    if (fullscreenPreview) {
+      void resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: outgoingOwnerKey, browserLeaseId: outgoingLeaseId })).catch(() => undefined);
+    }
+    fullscreenPreview = false;
+    workspaceLayoutReady = false;
+    workspaceLayoutApplying = true;
+    workspaceLayoutHydratedKey = '';
+    browserLeaseId = crypto.randomUUID();
+    applyWorkspaceLayout(WorkspaceLayoutPreferences.parse({}));
+  }
+
+  function applyWorkspaceLayout(preferences: WorkspaceLayoutPreferences) {
+    const parsed = WorkspaceLayoutPreferences.parse(preferences);
+    const tabs = [...parsed.inspector.openTabs];
+    inspectorVisible = parsed.inspector.visible;
+    inspectorMode = parsed.inspector.visible ? parsed.inspector.mode : 'docked';
+    dockTabs = tabs;
+    dockTab = parsed.inspector.activeTab === 'surfaces' || tabs.includes(parsed.inspector.activeTab)
+      ? parsed.inspector.activeTab
+      : 'surfaces';
+    const viewportMaximum = typeof window === 'undefined' ? parsed.inspector.width : Math.max(280, window.innerWidth * 0.48);
+    inspectorWidth = Math.min(parsed.inspector.width, viewportMaximum);
+    terminalOpen = parsed.terminal.visible;
+    terminalHeight = parsed.terminal.height;
+  }
+
+  function queueWorkspaceLayoutPersistence(owner = workspaceLayoutIdentity, preferences = snapshotWorkspaceLayout()) {
+    if (!owner || workspaceLayoutApplying) return;
+    const sourceKey = workspaceLayoutOwnerKey(owner);
+    const targetOwner = workspaceLayoutOwnerRedirects.get(sourceKey) ?? owner;
+    const targetKey = workspaceLayoutOwnerKey(targetOwner);
+    if (deletedWorkspaceLayoutKeys.has(targetKey)) return;
+    if (workspaceLayoutHydratedKey !== sourceKey && workspaceLayoutHydratedKey !== targetKey) return;
+    const parsed = writeWorkspaceLayoutJournal(targetOwner, preferences);
+    pendingWorkspaceLayouts.set(targetKey, { owner: targetOwner, preferences: parsed });
+    // Start the authoritative write in the same task as the interaction. A
+    // reload cannot strand a debounced timer, while the journal recovers a
+    // request that the browser cancels during teardown.
+    void flushWorkspaceLayout(targetKey);
+  }
+
+  function enqueueWorkspaceLayoutOperation(key: string, operation: () => Promise<void>) {
+    const completion = (workspaceLayoutSaveQueues.get(key) ?? Promise.resolve()).then(operation);
+    const retained = completion.catch(() => undefined);
+    workspaceLayoutSaveQueues.set(key, retained);
+    void retained.finally(() => {
+      if (workspaceLayoutSaveQueues.get(key) === retained) workspaceLayoutSaveQueues.delete(key);
+    });
+    return completion;
+  }
+
+  function assertWorkspaceLayoutWritable(key: string) {
+    if (deletedWorkspaceLayoutKeys.has(key)) throw new Error('The destination workspace layout was deleted.');
+  }
+
+  function writePersistedWorkspaceLayout(owner: WorkspaceLayoutOwner, preferences: WorkspaceLayoutPreferences) {
+    const key = workspaceLayoutOwnerKey(owner);
+    assertWorkspaceLayoutWritable(key);
+    return enqueueWorkspaceLayoutOperation(key, async () => {
+      assertWorkspaceLayoutWritable(key);
+      await resolveRemoteResult(setWorkspaceLayout({ owner, preferences }));
+      clearWorkspaceLayoutJournal(owner, preferences);
+    });
+  }
+
+  async function flushWorkspaceLayout(key?: string) {
+    const keys = key ? [key] : [...pendingWorkspaceLayouts.keys()];
+    await Promise.all(keys.map(async (pendingKey) => {
+      const pending = pendingWorkspaceLayouts.get(pendingKey);
+      pendingWorkspaceLayouts.delete(pendingKey);
+      if (!pending) return workspaceLayoutSaveQueues.get(pendingKey);
+      const completion = writePersistedWorkspaceLayout(pending.owner, pending.preferences);
+      try { await completion; }
+      catch (cause) {
+        if (workspaceLayoutIdentity && workspaceLayoutOwnerKey(workspaceLayoutIdentity) === workspaceLayoutOwnerKey(pending.owner)) {
+          error = errorMessage(cause, 'Workspace layout could not be saved.');
+        }
+      }
+    }));
+  }
+
+  async function adoptPersistedWorkspaceLayout(from: WorkspaceLayoutOwner, to: WorkspaceLayoutOwner, preferences: WorkspaceLayoutPreferences) {
+    const fromKey = workspaceLayoutOwnerKey(from);
+    const toKey = workspaceLayoutOwnerKey(to);
+    if (deletedWorkspaceLayoutKeys.has(toKey)) throw new Error('The destination workspace layout was deleted.');
+    workspaceLayoutOwnerRedirects.set(fromKey, to);
+    writeWorkspaceLayoutJournal(to, preferences);
+    pendingWorkspaceLayouts.delete(fromKey);
+    await (workspaceLayoutSaveQueues.get(fromKey) ?? Promise.resolve());
+    await enqueueWorkspaceLayoutOperation(toKey, async () => {
+      assertWorkspaceLayoutWritable(toKey);
+      await resolveRemoteResult(adoptWorkspaceLayout({ from, to, preferences }));
+    });
+    clearWorkspaceLayoutJournal(from);
+    clearWorkspaceLayoutJournal(to, preferences);
+    if (workspaceLayoutHydratedKey === fromKey) workspaceLayoutHydratedKey = toKey;
+  }
+
+  async function deletePersistedWorkspaceLayout(owner: WorkspaceLayoutOwner) {
+    const key = workspaceLayoutOwnerKey(owner);
+    deletedWorkspaceLayoutKeys.add(key);
+    for (const [sourceKey, target] of workspaceLayoutOwnerRedirects) {
+      if (sourceKey === key || workspaceLayoutOwnerKey(target) === key) workspaceLayoutOwnerRedirects.delete(sourceKey);
+    }
+    pendingWorkspaceLayouts.delete(key);
+    clearWorkspaceLayoutJournal(owner);
+    await (workspaceLayoutSaveQueues.get(key) ?? Promise.resolve());
+    await enqueueWorkspaceLayoutOperation(key, async () => {
+      await resolveRemoteResult(deleteWorkspaceLayout({ owner }));
+    });
+  }
+
+  async function hydrateWorkspaceLayout(owner: WorkspaceLayoutOwner) {
+    const key = workspaceLayoutOwnerKey(owner);
+    if (workspaceLayoutHydratedKey === key && !workspaceLayoutApplying) {
+      workspaceLayoutReady = true;
+      return;
+    }
+    const generation = ++workspaceLayoutHydrationGeneration;
+    const outgoingKey = workspaceLayoutHydratedKey;
+    // Saving the previous owner's geometry is independent from making the
+    // next owner usable. A stalled persistence request must not become a shell
+    // readiness lock; the journal remains the reload-safe recovery source.
+    if (outgoingKey) void flushWorkspaceLayout(outgoingKey).catch(() => undefined);
+    try {
+      const recovered = readWorkspaceLayoutJournal(owner);
+      const remoteLayout = recovered ? null : getWorkspaceLayout({ owner });
+      const remoteLayoutPromise = remoteLayout ? resolveRemoteResult(remoteLayout) : null;
+      const preferences = recovered ?? await new Promise<WorkspaceLayoutPreferences>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Workspace layout lookup timed out.')), 4_000);
+        remoteLayoutPromise!.then(
+          (value) => { clearTimeout(timeout); resolve(value); },
+          (cause) => { clearTimeout(timeout); reject(cause); }
+        );
+      });
+      if (generation !== workspaceLayoutHydrationGeneration || !workspaceLayoutIdentity || workspaceLayoutOwnerKey(workspaceLayoutIdentity) !== key) return;
+      applyWorkspaceLayout(preferences);
+      if (recovered) void writePersistedWorkspaceLayout(owner, recovered).catch((cause) => {
+        if (workspaceLayoutIdentity && workspaceLayoutOwnerKey(workspaceLayoutIdentity) === key) {
+          error = errorMessage(cause, 'Workspace layout could not be recovered.');
+        }
+      });
+    } catch {
+      if (generation !== workspaceLayoutHydrationGeneration || !workspaceLayoutIdentity || workspaceLayoutOwnerKey(workspaceLayoutIdentity) !== key) return;
+      applyWorkspaceLayout(WorkspaceLayoutPreferences.parse({}));
+    } finally {
+      if (generation === workspaceLayoutHydrationGeneration && workspaceLayoutIdentity && workspaceLayoutOwnerKey(workspaceLayoutIdentity) === key) {
+        workspaceLayoutHydratedKey = key;
+        workspaceLayoutApplying = false;
+        workspaceLayoutReady = true;
+      }
+    }
+  }
+
   function beginVisibleView(
     sessionId: string | null,
     location: 'chat' | 'settings' | 'surface' = 'chat',
@@ -297,8 +594,15 @@
     connectionId = overview?.gateway.connection.id ?? null,
     draftId = sessionId === null ? viewOwnership.current?.draftId ?? crypto.randomUUID() : null
   ) {
+    const previousLayoutOwner = layoutOwnerForView(visibleViewOwner);
+    const nextLayoutOwner = layoutOwnerForIdentity({ connectionId, profileId, sessionId, draftId });
+    if (workspaceLayoutOwnerKeyOrNull(previousLayoutOwner) !== workspaceLayoutOwnerKeyOrNull(nextLayoutOwner)) {
+      prepareWorkspaceLayoutOwnerTransition(previousLayoutOwner);
+    }
     const owner = viewOwnership.begin({ connectionId, profileId, sessionId, draftId, location });
+    visibleViewOwner = owner;
     activeSessionId = sessionId;
+    activeDraftId = owner.draftId;
     projectVisibleTurn(owner);
     return owner;
   }
@@ -310,13 +614,13 @@
   function ensureChatOwner() {
     const current = viewOwnership.current;
     if (current?.location === 'chat' && current.sessionId === activeSessionId) return current;
-    return viewOwnership.begin({
-      connectionId: overview?.gateway.connection.id ?? null,
-      profileId: activeSession?.profileId ?? profileSelectionTargetId ?? overview?.activeProfileId ?? null,
-      sessionId: activeSessionId,
-      draftId: activeSessionId === null ? current?.draftId ?? crypto.randomUUID() : null,
-      location: 'chat'
-    });
+    return beginVisibleView(
+      activeSessionId,
+      'chat',
+      activeSession?.profileId ?? profileSelectionTargetId ?? overview?.activeProfileId ?? null,
+      overview?.gateway.connection.id ?? null,
+      activeSessionId === null ? current?.draftId ?? crypto.randomUUID() : null
+    );
   }
 
   function turnKey(owner: Pick<TurnOwner, 'connectionId' | 'profileId' | 'sessionId' | 'draftId'>) {
@@ -437,6 +741,9 @@
         const initial = overview.sessions.find((session) => session.source === 'chat' && (session.profileId ?? 'default') === profileId);
         if (initial) await selectSession(initial.id);
       }
+      if (!viewOwnership.current && profileSelectionTargetId === null) {
+        beginVisibleView(null, 'chat', nextOverview.activeProfileId, nextOverview.gateway.connection.id, activeDraftId ?? crypto.randomUUID());
+      }
       return true;
     } catch (cause) {
       if (!silent && generation === workspaceLoadGeneration) error = cause instanceof Error ? cause.message : 'The workspace could not be loaded.';
@@ -447,16 +754,16 @@
 
   async function selectSession(sessionId: string) {
     if (sessionId !== activeSessionId) draftWorktree = null;
-    const session = overview?.sessions.find((item) => item.id === sessionId);
-    const sessionProfileId = session?.profileId ?? overview?.activeProfileId ?? null;
+    const currentOverview = overview;
+    const session = currentOverview?.sessions.find((item) => item.id === sessionId);
+    const sessionProfileId = session?.profileId ?? currentOverview?.activeProfileId ?? null;
     const intendedProfileId = profileSelectionTargetId ?? overview?.activeProfileId ?? null;
     if (session && sessionProfileId && sessionProfileId !== intendedProfileId) {
       await selectProfile(sessionProfileId, sessionId);
       return;
     }
-    const boundWorktree = overview?.worktrees.find((item) => item.threadId === sessionId);
-    if (session?.projectId) selectedProjectId = session.projectId;
-    else if (boundWorktree) selectedProjectId = boundWorktree.projectId;
+    const boundWorktree = currentOverview?.worktrees.find((item) => item.connectionId === currentOverview.gateway.connection.id && item.profileId === sessionProfileId && item.threadId === sessionId);
+    selectedProjectId = session?.projectId ?? boundWorktree?.projectId ?? null;
     const owner = beginVisibleView(sessionId, 'chat');
     activeSurface = null; settingsActive = false; error = ''; sessionHistoryError = null; messages = [];
     activeModelKey = session?.model ? modelSelectionKey('hermes', session.model, session.provider) : null;
@@ -536,7 +843,7 @@
     if (worktree) void selectProjectThread(worktree.projectId, worktree.threadId);
   }
 
-  async function bindCreatedWorktree(input: { projectId: string; repositoryPath: string; worktreePath: string; branch: string; sessionId: string }) {
+  async function bindCreatedWorktree(input: { connectionId: string; profileId: string; projectId: string; repositoryPath: string; worktreePath: string; branch: string; sessionId: string }) {
     let lastFailure: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try { return await resolveRemoteResult(bindHermesProjectWorktree(input)); }
@@ -557,6 +864,8 @@
     const requestId = crypto.randomUUID();
     const optimisticUserId = `optimistic-user-${requestId}`;
     const originalSessionId = activeSessionId;
+    const draftLayoutOwner = workspaceLayoutIdentity?.resource.kind === 'draft' ? workspaceLayoutIdentity : null;
+    const draftLayoutPreferences = draftLayoutOwner ? snapshotWorkspaceLayout() : null;
     const pendingWorktreeBinding = !originalSessionId && draftWorktree && activeProject && draftWorktree.branch
       ? { projectId: activeProject.id, repositoryPath: activeProject.repositoryPath, worktreePath: draftWorktree.path, branch: draftWorktree.branch }
       : null;
@@ -576,6 +885,20 @@
       accepted = true;
       let snapshot = result.snapshot as ChatTurnSnapshot;
       if (!originalSessionId) {
+        if (draftLayoutOwner && turnOwner.connectionId && turnOwner.profileId) {
+          const sessionLayoutOwner: WorkspaceLayoutOwner = {
+            connectionId: turnOwner.connectionId,
+            profileId: turnOwner.profileId,
+            resource: { kind: 'session', id: snapshot.sessionId }
+          };
+          const preferences = draftLayoutPreferences ?? WorkspaceLayoutPreferences.parse({});
+          try {
+            await adoptPersistedWorkspaceLayout(draftLayoutOwner, sessionLayoutOwner, preferences);
+          } catch (cause) {
+            try { await writePersistedWorkspaceLayout(sessionLayoutOwner, preferences); }
+            catch { if (isTurnVisible(turnOwner)) error = errorMessage(cause, 'Conversation started, but its workspace layout could not be adopted.'); }
+          }
+        }
         const currentView = viewOwnership.current;
         const adoptedViewOwner = currentView
           && currentView.connectionId === turnOwner.connectionId
@@ -586,19 +909,22 @@
           : null;
         turnOwner = adoptTurnSession(turnOwner, snapshot.sessionId);
         if (adoptedViewOwner) {
+          visibleViewOwner = adoptedViewOwner;
           viewOwner = adoptedViewOwner;
           activeSessionId = snapshot.sessionId;
+          activeDraftId = null;
           projectVisibleTurn(viewOwner);
         }
         if (pendingWorktreeBinding) {
           try {
-            const boundWorktree = await bindCreatedWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId });
+            if (!turnOwner.connectionId || !turnOwner.profileId) throw new Error('The new session has no active Hermes workspace owner.');
+            const boundWorktree = await bindCreatedWorktree({ ...pendingWorktreeBinding, connectionId: turnOwner.connectionId, profileId: turnOwner.profileId, sessionId: snapshot.sessionId });
             if (overview && isTurnVisible(turnOwner)) {
               overview = {
                 ...overview,
                 worktrees: [
                   boundWorktree,
-                  ...overview.worktrees.filter((item) => item.worktreeId !== boundWorktree.worktreeId && !(item.projectId === boundWorktree.projectId && item.threadId === boundWorktree.threadId))
+                  ...overview.worktrees.filter((item) => item.worktreeId !== boundWorktree.worktreeId && !(item.connectionId === boundWorktree.connectionId && item.profileId === boundWorktree.profileId && item.projectId === boundWorktree.projectId && item.threadId === boundWorktree.threadId))
                 ]
               };
             }
@@ -750,8 +1076,8 @@
   function selectComposerCompletion(completion: ComposerCompletion) {
     if (completion.behavior !== 'execute') return;
     if (completion.id === 'slash-new') void newSession();
-    else if (completion.id === 'slash-terminal') terminalOpen = true;
-    else if (completion.id === 'slash-review') { inspectorVisible = true; inspectorMode = 'docked'; dockTab = 'changes'; if (!dockTabs.includes('changes')) dockTabs = [...dockTabs, 'changes']; rememberInspectorState(); }
+    else if (completion.id === 'slash-terminal') { if (!workspaceLayoutInteractive) return; terminalOpen = true; rememberInspectorState(); }
+    else if (completion.id === 'slash-review') { if (!workspaceLayoutInteractive) return; inspectorVisible = true; inspectorMode = 'docked'; dockTab = 'changes'; if (!dockTabs.includes('changes')) dockTabs = [...dockTabs, 'changes']; rememberInspectorState(); }
     else if (completion.id === 'slash-model') activeSurface = 'models';
     else if (completion.id === 'slash-settings') openSettings('model');
   }
@@ -813,22 +1139,25 @@
   }
 
   function rememberInspectorState() {
-    inspectorSessionState[inspectorOwner] = { visible: inspectorVisible, mode: inspectorMode, tab: dockTab, tabs: [...dockTabs] };
+    if (!workspaceLayoutInteractive) return;
+    queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout());
   }
 
   function toggleInspector() {
+    if (!workspaceLayoutInteractive) return;
     inspectorVisible = !inspectorVisible;
     if (!inspectorVisible) inspectorMode = 'docked';
     rememberInspectorState();
   }
 
   function toggleInspectorFocus() {
-    if (!inspectorVisible) return;
+    if (!workspaceLayoutInteractive || !inspectorVisible) return;
     inspectorMode = inspectorMode === 'focused' ? 'docked' : 'focused';
     rememberInspectorState();
   }
 
   function openAgentsDock() {
+    if (!workspaceLayoutInteractive) return;
     inspectorVisible = true;
     inspectorMode = 'docked';
     dockTab = 'agents';
@@ -838,6 +1167,7 @@
 
   function startPanelResize(event: PointerEvent, panel: 'sidebar' | 'inspector' | 'terminal') {
     if (event.button !== 0) return;
+    if (panel !== 'sidebar' && !workspaceLayoutInteractive) return;
     event.preventDefault();
     const shell = document.querySelector<HTMLElement>('.companion-shell');
     const workspace = document.querySelector<HTMLElement>('.workspace');
@@ -846,6 +1176,7 @@
     const shellRect = shell.getBoundingClientRect();
     const workspaceRect = workspace.getBoundingClientRect();
     const primaryRect = primary.getBoundingClientRect();
+    if (panel === 'inspector' || panel === 'terminal') workspaceLayoutResizeActive = true;
     const onMove = (moveEvent: PointerEvent) => {
       if (panel === 'sidebar') sidebarWidth = Math.round(Math.min(420, Math.max(224, moveEvent.clientX - shellRect.left)));
       if (panel === 'inspector') inspectorWidth = Math.round(Math.min(workspaceRect.width * 0.48, Math.max(280, workspaceRect.right - moveEvent.clientX)));
@@ -854,16 +1185,27 @@
     const onEnd = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
       document.documentElement.removeAttribute('data-resizing');
+      if (panel === 'inspector' || panel === 'terminal') {
+        workspaceLayoutResizeActive = false;
+        queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout());
+      }
     };
     document.documentElement.dataset.resizing = panel;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onEnd, { once: true });
+    window.addEventListener('pointercancel', onEnd, { once: true });
   }
 
-  function toggleTerminal() { terminalOpen = !terminalOpen; }
+  function toggleTerminal() {
+    if (!workspaceLayoutInteractive) return;
+    terminalOpen = !terminalOpen;
+    queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout());
+  }
 
   async function runProfileAction(action: NonNullable<typeof primaryProfileAction>) {
+    if (!workspaceLayoutInteractive) return;
     if (!activeWorktree) { announcement = 'Select a project session to run this action'; return; }
     terminalOpen = true;
     await tick();
@@ -872,6 +1214,7 @@
   }
 
   function chooseGitAction(action: 'commit' | 'push' | 'create-pr') {
+    if (!workspaceLayoutInteractive) return;
     inspectorVisible = true;
     inspectorMode = 'docked';
     dockTab = 'changes';
@@ -1077,6 +1420,11 @@
   }
 
   async function handleSessionDeleted(sessionId: string) {
+    const deletedSession = overview?.sessions.find((session) => session.id === sessionId);
+    const connectionId = overview?.gateway.connection.id;
+    const deletedLayoutOwner = connectionId && deletedSession?.profileId
+      ? { connectionId, profileId: deletedSession.profileId, resource: { kind: 'session' as const, id: sessionId } }
+      : null;
     if (overview) {
       overview = {
         ...overview,
@@ -1091,6 +1439,7 @@
       sessionHistoryError = null;
       contextUsage = null;
     }
+    if (deletedLayoutOwner) await deletePersistedWorkspaceLayout(deletedLayoutOwner).catch(() => undefined);
     announcement = 'Session deleted';
     await loadWorkspace(true, true);
   }
@@ -1112,7 +1461,16 @@
 <svelte:window onkeydown={handleKeyboard} />
 
 <a href="#main-workspace" class="skip-link">Skip to workspace</a>
-<div class="shell-boot" data-visible={!shellPresented} role="status" aria-label="Starting Hermes Companion" aria-hidden={shellPresented}><Sparkles aria-hidden="true" /></div>
+<div
+  class="shell-boot"
+  data-visible={!shellPresented}
+  data-workspace-starting={workspaceStarting}
+  data-layout-ready={workspaceLayoutReady}
+  data-target-ready={workspaceTargetReady}
+  role="status"
+  aria-label="Starting Hermes Companion"
+  aria-hidden={shellPresented}
+><Sparkles aria-hidden="true" /></div>
 <div class="companion-shell" data-shell-presented={shellPresented} data-preview-fullscreen={fullscreenPreview} data-native-platform={nativePlatform} data-sidebar-visible={sidebarVisible ? 'true' : 'false'} style={`visibility: ${shellPresented ? 'visible' : 'hidden'}; --shell-sidebar-width: ${sidebarWidth}px; --shell-inspector-width: ${inspectorWidth}px; --shell-terminal-height: ${terminalHeight}px;`}>
   <div class="shell-chrome" aria-label="Application controls">
     <div class="chrome-leading">
@@ -1121,8 +1479,8 @@
       <Button size="icon-sm" variant="ghost" disabled aria-label="Forward" title="No next location"><ChevronRight /></Button>
     </div>
     <div class="chrome-trailing">
-      <Button size="icon-sm" variant={inspectorMode === 'focused' ? 'secondary' : 'ghost'} disabled={!inspectorVisible} onclick={toggleInspectorFocus} aria-controls="workspace-inspector" aria-pressed={inspectorMode === 'focused'} aria-label={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'} title={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'}>{#if inspectorMode === 'focused'}<Minimize2 />{:else}<Maximize2 />{/if}</Button>
-      <Button size="icon-sm" variant="ghost" onclick={toggleInspector} aria-controls="workspace-inspector" aria-expanded={inspectorVisible} aria-label={inspectorVisible ? 'Hide right panel' : 'Show right panel'} title={inspectorVisible ? 'Hide right panel' : 'Show right panel'}>{#if inspectorVisible}<PanelRightClose />{:else}<PanelRightOpen />{/if}</Button>
+      <Button size="icon-sm" variant={inspectorMode === 'focused' ? 'secondary' : 'ghost'} disabled={!workspaceLayoutInteractive || !inspectorVisible} onclick={toggleInspectorFocus} aria-controls="workspace-inspector" aria-pressed={inspectorMode === 'focused'} aria-label={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'} title={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'}>{#if inspectorMode === 'focused'}<Minimize2 />{:else}<Maximize2 />{/if}</Button>
+      <Button size="icon-sm" variant="ghost" disabled={!workspaceLayoutInteractive} onclick={toggleInspector} aria-controls="workspace-inspector" aria-expanded={inspectorVisible} aria-label={inspectorVisible ? 'Hide right panel' : 'Show right panel'} title={inspectorVisible ? 'Hide right panel' : 'Show right panel'}>{#if inspectorVisible}<PanelRightClose />{:else}<PanelRightOpen />{/if}</Button>
     </div>
   </div>
   <aside id="session-sidebar" class="session-sidebar" aria-label="Hermes navigation" aria-hidden={!sidebarVisible} inert={!sidebarVisible}>
@@ -1256,13 +1614,13 @@
           </div>
           <div class="pane-resizer terminal-resizer" role="separator" aria-label="Resize bottom panel" aria-orientation="horizontal" onpointerdown={(event) => startPanelResize(event, 'terminal')}></div>
           <div class="terminal-split-region" aria-hidden={!terminalOpen}>
-            <TerminalSplit bind:this={terminalSplit} worktree={activeWorktree} oncollapse={() => (terminalOpen = false)} />
+            {#if workspaceLayoutInteractive}<TerminalSplit bind:this={terminalSplit} worktree={activeWorktree} unavailableReason={workspaceUnavailableReason} oncollapse={() => { terminalOpen = false; queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout()); }} />{/if}
           </div>
           </div>
           {/if}
         </section>
       <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}>{#if workspaceLayoutInteractive}<WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} unavailableReason={workspaceUnavailableReason} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value, identity) => { if (identity.ownerKey === inspectorOwnerKey && identity.browserLeaseId === browserLeaseId) fullscreenPreview = value; }} />{/if}</aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">
@@ -1276,14 +1634,14 @@
     <div class="status-group status-left">
       <Button size="xs" variant="ghost" title="Command center" onclick={() => (commandOpen = true)}><CommandIcon data-icon="inline-start" /> Command center</Button>
       <Button class="status-gateway" size="xs" variant="ghost" data-tone={gatewayTone} title={overview?.gateway.compatibility.reason ?? 'Manage gateway connection'} onclick={() => (connectOpen = true)}><Wifi data-icon="inline-start" /><span>Gateway</span><small>{overview?.gateway.status ?? 'Checking'}</small></Button>
-      {#if capabilityFor('agents')?.available}<Button size="xs" variant={inspectorVisible && dockTab === 'agents' ? 'secondary' : 'ghost'} title="Live Hermes subagents" onclick={openAgentsDock}><Bot data-icon="inline-start" /> Agents</Button>{/if}
+      {#if capabilityFor('agents')?.available}<Button size="xs" variant={inspectorVisible && dockTab === 'agents' ? 'secondary' : 'ghost'} disabled={!workspaceLayoutInteractive} title="Live Hermes subagents" onclick={openAgentsDock}><Bot data-icon="inline-start" /> Agents</Button>{/if}
       {#if capabilityFor('jobs')?.available}<Button size="xs" variant="ghost" title="Scheduled jobs" onclick={() => chooseSurface('jobs')}><Timer data-icon="inline-start" /> Cron</Button>{/if}
     </div>
     <div class="status-group status-right">
       {#if activeSession}<span class="status-item" title={activeSession.title}><Clock3 /> {sessionElapsed}</span>{/if}
       {#if statusShowsContext && contextUsage}<ContextUsagePopover id="status-context-usage" usage={contextUsage} compact trigger="status" />{/if}
       {#if statusShowsApproval && approvalMode}<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} size="xs" variant="ghost" title={`Hermes approval mode: ${composerPermission.label}`} disabled={approvalPending}><ShieldCheck data-icon="inline-start" /> {composerPermission.label}</Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end" side="top" sideOffset={6}><DropdownMenu.Label>Approval mode</DropdownMenu.Label><DropdownMenu.Group>{#each composerPermissionOptions as option (option.id)}<DropdownMenu.Item onclick={() => void setApprovalMode(option.id as 'manual' | 'smart' | 'off')}><span class="status-menu-copy"><strong>{option.label}</strong><small>{option.description}</small></span>{#if option.id === approvalMode}<Check />{/if}</DropdownMenu.Item>{/each}</DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{/if}
-      <Button size="xs" variant={terminalOpen ? 'secondary' : 'ghost'} onclick={toggleTerminal} aria-pressed={terminalOpen} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} title={terminalOpen ? 'Hide terminal' : 'Show terminal'}><SquareTerminal /></Button>
+      <Button size="xs" variant={terminalOpen ? 'secondary' : 'ghost'} disabled={!workspaceLayoutInteractive} onclick={toggleTerminal} aria-pressed={terminalOpen} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} title={terminalOpen ? 'Hide terminal' : 'Show terminal'}><SquareTerminal /></Button>
     </div>
   </footer>
   <div class="visually-hidden" aria-live="polite">{announcement}</div>

@@ -214,17 +214,19 @@ describe('shell resilience', () => {
   });
 
   it('deduplicates upstream sessions and gates the first shell frame behind stable layout', async () => {
-    const [page, gateway, navigation] = await Promise.all([
+    const [page, gateway, hermesClient, navigation] = await Promise.all([
       source('routes/+page.svelte'),
       source('lib/client/remote/gateway.remote.ts'),
+      source('lib/server/hermes-client.ts'),
       source('lib/components/companion/session-navigation.svelte')
     ]);
     expect(gateway).toContain('const sessions = liveSessions.map');
     expect(gateway).not.toContain('directProviderSessions');
     expect(gateway).not.toContain('developmentSessions');
-    expect(gateway).toContain('profile=all&archived=exclude&order=recent');
-    expect(gateway).toContain('profile=all&archived=only&order=recent');
-    expect(gateway).toContain('archived: item.archived === true');
+    expect(gateway).toContain("client.listProfileSessions('exclude')");
+    expect(gateway).toContain("client.listProfileSessions('only')");
+    expect(hermesClient).toContain('profile=all&archived=${archived}&order=recent');
+    expect(hermesClient).toContain('archived: item.archived === true');
     expect(navigation).toContain('const uniqueSessions = $derived');
     expect(navigation).toContain('const values = uniqueSessions.filter');
     expect(page).toContain("let shellPresented = $state(false);");

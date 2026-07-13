@@ -29,14 +29,14 @@ export class DefaultCompanionBridge implements CompanionBridge {
     switch (payload.action) {
       case 'project.inspect': return inspectRepository(payload.repositoryPath, payload.initialize);
       case 'worktree.create': {
-        const created = await createWorktree(payload); return this.store.addWorktree({ projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: created.path, branch: created.branch, threadId: payload.threadId, parentWorktreeId: payload.parentWorktreeId, writerRunId: null, createdAt: new Date().toISOString() });
+        const created = await createWorktree(payload); return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: created.path, branch: created.branch, threadId: payload.threadId, parentWorktreeId: payload.parentWorktreeId, writerRunId: null, createdAt: new Date().toISOString() });
       }
       case 'worktree.attach': {
         const attached = await attachWorktree(payload);
-        return this.store.addWorktree({ projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: attached.path, branch: attached.branch, threadId: payload.threadId, parentWorktreeId: null, writerRunId: null, createdAt: new Date().toISOString() });
+        return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: attached.path, branch: attached.branch, threadId: payload.threadId, parentWorktreeId: null, writerRunId: null, createdAt: new Date().toISOString() });
       }
       case 'worktree.detach': this.terminals.closeWorktree(payload.worktreeId); await this.store.removeWorktree(payload.worktreeId); return { ok: true };
-      case 'worktree.list': return this.store.listWorktrees(payload.projectId);
+      case 'worktree.list': return this.store.listWorktrees(payload.connectionId, payload.projectId, payload.profileId);
       case 'worktree.remove': {
         const worktree = await this.requireWorktree(payload.worktreeId); if (worktree.writerRunId) throw new Error('Cannot remove a worktree with an active writer.');
         await removeWorktree(payload.repositoryPath, worktree.path, payload.force); await this.store.removeWorktree(payload.worktreeId); return { ok: true };

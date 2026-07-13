@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { AnnotationPayload, DesktopPreferences, GatewayConnection, PreviewLease, ProfileUiPreferences, ProjectBinding, WorktreeRecord } from '@hermes-companion/contracts';
+import { AnnotationPayload, DesktopPreferences, GatewayConnection, PreviewLease, ProfileUiPreferences, ProjectBinding, workspaceLayoutOwnerKey, WorkspaceLayoutOwner, WorkspaceLayoutPreferences, WorktreeRecord } from '@hermes-companion/contracts';
 
 const AuditEvent = z.object({ id: z.string().uuid(), action: z.string(), subject: z.string(), at: z.string().datetime(), detail: z.record(z.string(), z.unknown()).default({}) });
 const RunRecord = z.object({
@@ -17,6 +17,7 @@ const AnnotationRecord = AnnotationPayload.extend({
 });
 const LegacyAnnotationRecord = z.object({ id: z.string().uuid(), worktreeId: z.string(), threadId: z.string(), route: z.string(), selector: z.string(), note: z.string(), screenshot: z.string().nullable(), createdAt: z.string().datetime() });
 const PreviewRecord = z.object({ id: z.string().uuid(), worktreeId: z.string(), origin: z.string().url(), relayUrl: z.string().url().nullable(), designModeAllowed: z.boolean(), expiresAt: z.string().datetime() });
+const StoredWorkspaceLayout = WorkspaceLayoutPreferences.catch(WorkspaceLayoutPreferences.parse({}));
 
 const CompanionState = z.object({
   version: z.literal(1),
@@ -29,6 +30,7 @@ const CompanionState = z.object({
   previews: z.array(PreviewRecord),
   profileUi: z.record(z.string(), ProfileUiPreferences).default({}),
   desktopPreferences: DesktopPreferences.default(DesktopPreferences.parse({})),
+  workspaceLayouts: z.record(z.string(), StoredWorkspaceLayout).default({}),
   pinnedSessionIds: z.array(z.string()).default([]),
   archivedSessionIds: z.array(z.string()).default([]),
   unreadSessionIds: z.array(z.string()).default([]),
@@ -50,7 +52,7 @@ const initialState = (): CompanionState => ({
     bridgeUrl: process.env.HERMES_BRIDGE_URL ?? null,
     hermesProfileId: null
   }],
-  projects: [], worktrees: [], runs: [], annotations: [], previews: [], profileUi: {}, desktopPreferences: DesktopPreferences.parse({}), pinnedSessionIds: [], archivedSessionIds: [], unreadSessionIds: [], audit: []
+  projects: [], worktrees: [], runs: [], annotations: [], previews: [], profileUi: {}, desktopPreferences: DesktopPreferences.parse({}), workspaceLayouts: {}, pinnedSessionIds: [], archivedSessionIds: [], unreadSessionIds: [], audit: []
 });
 
 export class CompanionRepository {
@@ -143,6 +145,40 @@ export class CompanionRepository {
     return state.desktopPreferences;
   }
 
+  async getWorkspaceLayout(owner: z.infer<typeof WorkspaceLayoutOwner>) {
+    const state = await this.load();
+    return WorkspaceLayoutPreferences.parse(state.workspaceLayouts[workspaceLayoutOwnerKey(owner)] ?? {});
+  }
+
+  async setWorkspaceLayout(owner: z.infer<typeof WorkspaceLayoutOwner>, preferences: z.infer<typeof WorkspaceLayoutPreferences>) {
+    const state = await this.load();
+    const parsedOwner = WorkspaceLayoutOwner.parse(owner);
+    const parsedPreferences = WorkspaceLayoutPreferences.parse(preferences);
+    state.workspaceLayouts[workspaceLayoutOwnerKey(parsedOwner)] = parsedPreferences;
+    await this.persist();
+    return parsedPreferences;
+  }
+
+  async adoptWorkspaceLayout(from: z.infer<typeof WorkspaceLayoutOwner>, to: z.infer<typeof WorkspaceLayoutOwner>, preferences?: z.infer<typeof WorkspaceLayoutPreferences>) {
+    const state = await this.load();
+    const parsedFrom = WorkspaceLayoutOwner.parse(from);
+    const parsedTo = WorkspaceLayoutOwner.parse(to);
+    const fromKey = workspaceLayoutOwnerKey(parsedFrom);
+    const toKey = workspaceLayoutOwnerKey(parsedTo);
+    const adopted = WorkspaceLayoutPreferences.parse(preferences ?? state.workspaceLayouts[fromKey] ?? state.workspaceLayouts[toKey] ?? {});
+    state.workspaceLayouts[toKey] = adopted;
+    delete state.workspaceLayouts[fromKey];
+    await this.persist();
+    return adopted;
+  }
+
+  async deleteWorkspaceLayout(owner: z.infer<typeof WorkspaceLayoutOwner>) {
+    const state = await this.load();
+    delete state.workspaceLayouts[workspaceLayoutOwnerKey(owner)];
+    await this.persist();
+    return { ok: true as const };
+  }
+
   async getArchivedSessionIds() { return (await this.load()).archivedSessionIds; }
   async getUnreadSessionIds() { return (await this.load()).unreadSessionIds; }
 
@@ -172,41 +208,76 @@ export class CompanionRepository {
     return { sessionId, pinned };
   }
 
-  async listProjects() { return (await this.load()).projects; }
-  async getProject(id: string) { return (await this.load()).projects.find((project) => project.id === id) ?? null; }
+  async listProjects(connectionId?: string) {
+    return (await this.load()).projects.filter((project) => !connectionId || project.connectionId === connectionId);
+  }
+  async getProject(id: string, connectionId?: string) {
+    return (await this.load()).projects.find((project) => project.id === id && (!connectionId || project.connectionId === connectionId)) ?? null;
+  }
   async upsertProject(project: z.infer<typeof ProjectBinding>) {
     const state = await this.load();
-    const index = state.projects.findIndex((item) => item.id === project.id);
+    const index = state.projects.findIndex((item) => item.connectionId === project.connectionId && item.id === project.id);
     if (index === -1) state.projects.push(project); else state.projects[index] = project;
     this.addAuditToState(state, 'project.bound', project.id, { repositoryPath: project.repositoryPath });
     await this.persist();
     return project;
   }
 
-  async listWorktrees(projectId?: string) {
+  async listWorktrees(projectId?: string, connectionId?: string, profileId?: string) {
     const worktrees = (await this.load()).worktrees;
-    return worktrees.filter((worktree) => !projectId || worktree.projectId === projectId);
+    return worktrees.filter((worktree) => (!projectId || worktree.projectId === projectId)
+      && (!connectionId || worktree.connectionId === connectionId)
+      && (!profileId || worktree.profileId === profileId));
   }
-  async getWorktreeForThread(threadId: string, projectId?: string) {
-    return (await this.load()).worktrees.find((worktree) => worktree.threadId === threadId && (!projectId || worktree.projectId === projectId)) ?? null;
+  async getWorktree(worktreeId: string, connectionId: string, profileId?: string) {
+    return (await this.load()).worktrees.find((worktree) => worktree.worktreeId === worktreeId
+      && worktree.connectionId === connectionId
+      && (!profileId || worktree.profileId === profileId)) ?? null;
+  }
+  async getWorktreeForThread(threadId: string, projectId: string | undefined, connectionId: string, profileId: string) {
+    return (await this.load()).worktrees.find((worktree) => worktree.threadId === threadId
+      && worktree.connectionId === connectionId
+      && worktree.profileId === profileId
+      && (!projectId || worktree.projectId === projectId)) ?? null;
   }
   async addWorktree(worktree: z.infer<typeof WorktreeRecord>) {
     const state = await this.load();
-    if (state.worktrees.some((item) => item.worktreeId === worktree.worktreeId)) throw new Error('Worktree already exists.');
-    if (state.worktrees.some((item) => item.projectId === worktree.projectId && item.threadId === worktree.threadId)) throw new Error('This Hermes session already has a worktree in the selected project.');
-    if (worktree.parentWorktreeId) {
-      const parent = state.worktrees.find((item) => item.worktreeId === worktree.parentWorktreeId);
-      if (!parent || parent.projectId !== worktree.projectId || parent.parentWorktreeId) throw new Error('Child worktree requires a top-level parent in the same project.');
+    const parsed = WorktreeRecord.parse(worktree);
+    if (state.worktrees.some((item) => item.worktreeId === parsed.worktreeId)) throw new Error('Worktree already exists.');
+    if (state.worktrees.some((item) => item.connectionId === parsed.connectionId && item.profileId === parsed.profileId && item.projectId === parsed.projectId && item.threadId === parsed.threadId)) throw new Error('This Hermes session already has a worktree in the selected project.');
+    if (state.worktrees.some((item) => item.connectionId === parsed.connectionId && item.path === parsed.path)) throw new Error('This worktree path is already bound to another Hermes session.');
+    if (parsed.parentWorktreeId) {
+      const parent = state.worktrees.find((item) => item.connectionId === parsed.connectionId && item.profileId === parsed.profileId && item.worktreeId === parsed.parentWorktreeId);
+      if (!parent || parent.projectId !== parsed.projectId || parent.parentWorktreeId) throw new Error('Child worktree requires a top-level parent in the same project.');
     }
-    state.worktrees.push(worktree);
-    this.addAuditToState(state, 'worktree.created', worktree.worktreeId, { branch: worktree.branch, parentWorktreeId: worktree.parentWorktreeId });
+    state.worktrees.push(parsed);
+    this.addAuditToState(state, 'worktree.created', parsed.worktreeId, { connectionId: parsed.connectionId, profileId: parsed.profileId, branch: parsed.branch, parentWorktreeId: parsed.parentWorktreeId });
     await this.persist();
-    return worktree;
+    return parsed;
   }
-  async removeWorktree(id: string) {
-    const state = await this.load(); const worktree = state.worktrees.find((item) => item.worktreeId === id);
+  async upsertWorktreeBinding(worktree: z.infer<typeof WorktreeRecord>) {
+    const state = await this.load();
+    const parsed = WorktreeRecord.parse(worktree);
+    const conflictingId = state.worktrees.find((item) => item.worktreeId === parsed.worktreeId
+      && (item.connectionId !== parsed.connectionId || item.profileId !== parsed.profileId || item.projectId !== parsed.projectId || item.threadId !== parsed.threadId));
+    if (conflictingId) throw new Error('Worktree identity is already bound to another Hermes session.');
+    const existing = state.worktrees.find((item) => item.connectionId === parsed.connectionId && item.profileId === parsed.profileId && item.projectId === parsed.projectId && item.threadId === parsed.threadId);
+    const identityChanged = existing && (existing.worktreeId !== parsed.worktreeId || existing.path !== parsed.path || existing.branch !== parsed.branch);
+    if (existing?.writerRunId && identityChanged) throw new Error('Cannot repair a worktree binding while it has an active writer.');
+    const samePath = state.worktrees.find((item) => item.connectionId === parsed.connectionId && item.path === parsed.path && item !== existing);
+    if (samePath) throw new Error('This worktree path is already bound to another Hermes session.');
+    state.worktrees = state.worktrees.filter((item) => !(item.connectionId === parsed.connectionId && item.worktreeId === parsed.worktreeId)
+      && !(item.connectionId === parsed.connectionId && item.profileId === parsed.profileId && item.projectId === parsed.projectId && item.threadId === parsed.threadId));
+    state.worktrees.push({ ...parsed, writerRunId: existing?.writerRunId ?? parsed.writerRunId });
+    this.addAuditToState(state, existing ? 'session.worktree.repaired' : 'session.worktree.bound', parsed.threadId, { projectId: parsed.projectId, worktreeId: parsed.worktreeId, path: parsed.path });
+    await this.persist();
+    return state.worktrees.at(-1)!;
+  }
+  async removeWorktree(id: string, connectionId?: string) {
+    const state = await this.load(); const worktree = state.worktrees.find((item) => item.worktreeId === id && (!connectionId || item.connectionId === connectionId));
+    if (!worktree) throw new Error('Worktree was not found for the requested owner.');
     if (worktree?.writerRunId) throw new Error('Cannot remove a worktree with an active writer.');
-    state.worktrees = state.worktrees.filter((item) => item.worktreeId !== id); this.addAuditToState(state, 'worktree.removed', id); await this.persist();
+    state.worktrees = state.worktrees.filter((item) => item !== worktree); this.addAuditToState(state, 'worktree.removed', id); await this.persist();
   }
 
   async acquireWriter(worktreeId: string, run: z.infer<typeof RunRecord>) {

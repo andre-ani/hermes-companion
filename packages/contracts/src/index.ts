@@ -267,6 +267,43 @@ export const DesktopPreferences = z.object({
 });
 export type DesktopPreferences = z.infer<typeof DesktopPreferences>;
 
+export const WorkspaceDockTab = z.enum(['surfaces', 'files', 'terminal', 'browser', 'changes', 'agents']);
+export type WorkspaceDockTab = z.infer<typeof WorkspaceDockTab>;
+
+export const WorkspaceLayoutOwner = z.object({
+  connectionId: z.string().min(1),
+  profileId: z.string().min(1),
+  resource: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('session'), id: z.string().min(1) }),
+    z.object({ kind: z.literal('draft'), id: z.string().uuid() })
+  ])
+});
+export type WorkspaceLayoutOwner = z.infer<typeof WorkspaceLayoutOwner>;
+
+export function workspaceLayoutOwnerKey(owner: WorkspaceLayoutOwner) {
+  const parsed = WorkspaceLayoutOwner.parse(owner);
+  return JSON.stringify([
+    parsed.connectionId,
+    parsed.profileId,
+    [parsed.resource.kind, parsed.resource.id]
+  ]);
+}
+
+export const WorkspaceLayoutPreferences = z.object({
+  inspector: z.object({
+    visible: z.boolean().default(false),
+    mode: z.enum(['docked', 'focused']).default('docked'),
+    activeTab: WorkspaceDockTab.default('surfaces'),
+    openTabs: z.array(WorkspaceDockTab.exclude(['surfaces'])).max(6).default([]),
+    width: z.number().int().min(280).max(960).default(480)
+  }).default({ visible: false, mode: 'docked', activeTab: 'surfaces', openTabs: [], width: 480 }),
+  terminal: z.object({
+    visible: z.boolean().default(false),
+    height: z.number().int().min(176).max(720).default(260)
+  }).default({ visible: false, height: 260 })
+});
+export type WorkspaceLayoutPreferences = z.infer<typeof WorkspaceLayoutPreferences>;
+
 // This is the only Hermes Agent capability descriptor that Companion accepts
 // as a verified contract. New upstream versions must be consciously added here
 // with their schema and compatibility policy before a release can claim support.
@@ -632,12 +669,22 @@ export const ProjectBinding = z.object({
 export type ProjectBinding = z.infer<typeof ProjectBinding>;
 
 export const WorktreeRecord = WorktreeContext.extend({
+  // Legacy records intentionally fail closed until they are re-verified and
+  // rebound through the active Hermes connection/profile.
+  connectionId: z.string().min(1).default('legacy-unscoped'),
+  profileId: z.string().min(1).default('legacy-unscoped'),
   threadId: z.string().min(1),
   parentWorktreeId: z.string().min(1).nullable().default(null),
   writerRunId: z.string().nullable(),
   createdAt: z.string().datetime()
 });
 export type WorktreeRecord = z.infer<typeof WorktreeRecord>;
+
+export const SessionWorkspaceTarget = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), worktree: WorktreeRecord }),
+  z.object({ available: z.literal(false), reason: z.string().min(1) })
+]);
+export type SessionWorkspaceTarget = z.infer<typeof SessionWorkspaceTarget>;
 
 export const HermesGitWorktree = z.object({
   path: z.string().min(1),
@@ -867,10 +914,10 @@ export const BridgeEnvelope = z.object({
   capability: z.enum(['projects', 'worktrees', 'pty', 'git', 'files', 'preview', 'annotations']),
   payload: z.discriminatedUnion('action', [
     z.object({ action: z.literal('project.inspect'), repositoryPath: z.string().min(1), initialize: z.boolean().default(false) }),
-    z.object({ action: z.literal('worktree.create'), projectId: z.string().min(1), repositoryPath: z.string().min(1), threadId: z.string().min(1), branch: z.string().min(1), base: z.string().min(1).default('HEAD'), parentWorktreeId: z.string().min(1).nullable().default(null) }),
-    z.object({ action: z.literal('worktree.attach'), projectId: z.string().min(1), repositoryPath: z.string().min(1), worktreePath: z.string().min(1), threadId: z.string().min(1), branch: z.string().min(1) }),
+    z.object({ action: z.literal('worktree.create'), connectionId: z.string().min(1).default('legacy-unscoped'), profileId: z.string().min(1).default('legacy-unscoped'), projectId: z.string().min(1), repositoryPath: z.string().min(1), threadId: z.string().min(1), branch: z.string().min(1), base: z.string().min(1).default('HEAD'), parentWorktreeId: z.string().min(1).nullable().default(null) }),
+    z.object({ action: z.literal('worktree.attach'), connectionId: z.string().min(1).default('legacy-unscoped'), profileId: z.string().min(1).default('legacy-unscoped'), projectId: z.string().min(1), repositoryPath: z.string().min(1), worktreePath: z.string().min(1), threadId: z.string().min(1), branch: z.string().min(1) }),
     z.object({ action: z.literal('worktree.detach'), worktreeId: z.string().min(1) }),
-    z.object({ action: z.literal('worktree.list'), projectId: z.string().min(1).optional() }),
+    z.object({ action: z.literal('worktree.list'), connectionId: z.string().min(1).default('legacy-unscoped'), profileId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }),
     z.object({ action: z.literal('worktree.remove'), repositoryPath: z.string().min(1), worktreeId: z.string().min(1), force: z.boolean().default(false) }),
     z.object({ action: z.literal('worktree.writer.acquire'), worktreeId: z.string().min(1), runId: z.string().uuid() }),
     z.object({ action: z.literal('worktree.writer.release'), worktreeId: z.string().min(1), runId: z.string().uuid() }),

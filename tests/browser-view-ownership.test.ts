@@ -15,7 +15,7 @@ async function electronSources() {
 }
 
 function componentInvocation(contents: string, name: string) {
-  const start = contents.indexOf(`<${name}`);
+  const start = contents.search(new RegExp(`<${name}(?:\\s|/?>)`));
   if (start < 0) return '';
   const end = contents.indexOf('/>', start);
   return contents.slice(start, end < 0 ? start + 1_000 : end + 2);
@@ -45,13 +45,18 @@ const browserCleanup = /(?:browser.{0,80}(?:close|release|detach|dispose)|(?:clo
 describe('native BrowserView ownership', () => {
   it('derives one dock/browser owner from both the active profile and session context', async () => {
     const page = await source('routes/+page.svelte');
-    const ownerStart = Math.max(page.indexOf('const inspectorOwnerKey'), page.indexOf('const dockOwnerKey'), page.indexOf('const browserOwnerKey'));
-    const ownerEnd = ownerStart < 0 ? -1 : page.indexOf(';', ownerStart);
-    const ownerDeclaration = ownerStart < 0 ? '' : page.slice(ownerStart, ownerEnd < 0 ? ownerStart + 500 : ownerEnd + 1);
+    const layoutIdentityStart = page.indexOf('const workspaceLayoutIdentity');
+    const layoutIdentityEnd = layoutIdentityStart < 0 ? -1 : page.indexOf('const inspectorOwnerKey', layoutIdentityStart);
+    const layoutIdentity = layoutIdentityStart < 0 ? '' : page.slice(layoutIdentityStart, layoutIdentityEnd < 0 ? layoutIdentityStart + 1_200 : layoutIdentityEnd);
+    const ownerKeyStart = page.indexOf('const inspectorOwnerKey');
+    const ownerKeyEnd = ownerKeyStart < 0 ? -1 : page.indexOf(';', ownerKeyStart);
+    const ownerKeyDeclaration = ownerKeyStart < 0 ? '' : page.slice(ownerKeyStart, ownerKeyEnd < 0 ? ownerKeyStart + 500 : ownerKeyEnd + 1);
     const dockInvocation = componentInvocation(page, 'WorkspaceDock');
 
-    expect.soft(/(?:activeProfile|profilePreferenceKey)/.test(ownerDeclaration), 'dock owner must include active profile identity').toBe(true);
-    expect.soft(/activeSessionId/.test(ownerDeclaration), 'dock owner must include active session identity').toBe(true);
+    expect.soft(/owner\.profileId/.test(layoutIdentity), 'layout identity must preserve the visible profile owner').toBe(true);
+    expect.soft(/owner\.sessionId\s*!==\s*activeSessionId/.test(layoutIdentity), 'layout identity must reject a stale visible session owner').toBe(true);
+    expect.soft(/connectionId:\s*owner\.connectionId[\s\S]*profileId:\s*owner\.profileId[\s\S]*kind:\s*['"]session['"][\s\S]*id:\s*owner\.sessionId/.test(layoutIdentity), 'session layout ownership must include connection, profile, and session identity').toBe(true);
+    expect.soft(/workspaceLayoutOwnerKey\(workspaceLayoutIdentity\)/.test(ownerKeyDeclaration), 'browser owner key must derive from the typed workspace layout identity').toBe(true);
     expect.soft(/\b(?:browserOwnerKey|ownerKey)\b(?:=\{[^}]*(?:inspector|dock|browser)[A-Za-z]*Owner[A-Za-z]*\})?/i.test(dockInvocation), 'WorkspaceDock must receive the root-owned browser owner key').toBe(true);
     expect.soft(/(?:\{inspectorVisible\}|(?:visible|inspectorVisible)=\{inspectorVisible\})/.test(dockInvocation), 'WorkspaceDock must receive root inspector visibility').toBe(true);
   });
@@ -84,6 +89,22 @@ describe('native BrowserView ownership', () => {
     expect.soft(/releaseBrowser\s*\(\s*\{[^}]*ownerKey[^}]*browserLeaseId/s.test(dock), 'dock teardown must release the exact owner and lease').toBe(true);
     expect.soft(/case\s+['"]browser\.claim['"][\s\S]{0,180}input\.ownerKey[\s\S]{0,180}input\.browserLeaseId/.test(main), 'native claim dispatch must receive both identity fields').toBe(true);
     expect.soft(/case\s+['"]browser\.release['"][\s\S]{0,180}input\.ownerKey[\s\S]{0,180}input\.browserLeaseId/.test(main), 'native release dispatch must receive both identity fields').toBe(true);
+  });
+
+  it('rotates the lease for every Browser surface activation', async () => {
+    const [page, dock, main] = await Promise.all([
+      source('routes/+page.svelte'),
+      source('lib/components/companion/workspace-dock.svelte'),
+      readFile(new URL('main.cjs', electronSource), 'utf8')
+    ]);
+    const synchronize = functionSource(page, 'synchronizeBrowserSurfaceLease');
+    const release = functionSource(main, 'releaseBrowserView');
+
+    expect.soft(/if\s*\(\s*active\s*&&\s*!browserSurfaceActive\s*\)\s*browserLeaseId\s*=\s*crypto\.randomUUID\(\)/.test(synchronize), 'an inactive-to-active transition must mint a new native lease').toBe(true);
+    expect.soft(/browserSurfaceActive\s*=\s*active/.test(synchronize), 'activation state must be recorded so stable rerenders do not churn the lease').toBe(true);
+    expect.soft(/workspaceLayoutInteractive\s*&&\s*inspectorVisible\s*&&\s*dockTab\s*===\s*['"]browser['"]/.test(page), 'activation must include remount readiness, inspector visibility, and the selected Browser tab').toBe(true);
+    expect.soft(/const\s+ownerKey\s*=\s*browserOwnerKey[\s\S]{0,120}const\s+leaseId\s*=\s*browserLeaseId[\s\S]{0,220}releaseBrowserLease\(ownerKey,\s*leaseId\)/.test(dock), 'dock cleanup must release the identity captured by the outgoing activation').toBe(true);
+    expect.soft(/if\s*\(\s*!sameBrowserIdentity\(ownerKey,\s*browserLeaseId\)\s*\)\s*return\s*\{\s*ok:\s*false\s*\}/.test(release), 'a delayed release must be rejected before native view destruction').toBe(true);
   });
 
   it('keeps preview attachment on the same governed browser identity path', async () => {

@@ -57,6 +57,7 @@ describe('HermesServeRunManager', () => {
     const directory = await mkdtemp(join(tmpdir(), 'hermes-serve-run-'));
     const repository = new CompanionRepository(join(directory, 'state.json'));
     await repository.addWorktree({
+      connectionId: 'gateway-1', profileId: 'default',
       projectId: 'project-1', worktreeId: 'worktree-1', path: join(directory, 'worktree'), branch: 'thread/one',
       threadId: 'thread-1', writerRunId: null, createdAt: new Date().toISOString()
     });
@@ -128,6 +129,7 @@ describe('HermesServeRunManager', () => {
     const directory = await mkdtemp(join(tmpdir(), 'hermes-serve-run-remote-'));
     const repository = new CompanionRepository(join(directory, 'state.json'));
     await repository.addWorktree({
+      connectionId: 'gateway-remote-1', profileId: 'default',
       projectId: 'project-1', worktreeId: 'worktree-1', path: join(directory, 'worktree'), branch: 'thread/one',
       threadId: 'thread-1', writerRunId: null, createdAt: new Date().toISOString()
     });
@@ -179,6 +181,7 @@ describe('HermesServeRunManager', () => {
     const directory = await mkdtemp(join(tmpdir(), 'hermes-serve-reconnect-'));
     const repository = new CompanionRepository(join(directory, 'state.json'));
     await repository.addWorktree({
+      connectionId: 'gateway-owner', profileId: 'hermes-code',
       projectId: 'project-1', worktreeId: 'worktree-1', path: join(directory, 'worktree'), branch: 'thread/reconnect',
       threadId: 'thread-1', writerRunId: null, createdAt: new Date().toISOString()
     });
@@ -263,6 +266,7 @@ describe('HermesServeRunManager', () => {
     const directory = await mkdtemp(join(tmpdir(), 'hermes-serve-exhausted-'));
     const repository = new CompanionRepository(join(directory, 'state.json'));
     await repository.addWorktree({
+      connectionId: 'gateway-exhausted', profileId: 'default',
       projectId: 'project-1', worktreeId: 'worktree-1', path: join(directory, 'worktree'), branch: 'thread/exhausted',
       threadId: 'thread-1', writerRunId: null, createdAt: new Date().toISOString()
     });

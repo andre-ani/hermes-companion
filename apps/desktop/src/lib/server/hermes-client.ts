@@ -92,7 +92,7 @@ export function normalizeHermesSession(value: unknown): HermesSession {
     title: stringValue(item.title, stringValue(item.preview, 'Untitled session')),
     model: nullableString(item.model),
     createdAt: timestampValue(item.started_at ?? item.created_at),
-    updatedAt: timestampValue(item.last_active ?? item.updated_at),
+    updatedAt: timestampValue(item.last_active ?? item.last_active_at ?? item.updated_at),
     messageCount: numberValue(item.message_count),
     archived: item.archived === true,
     source: ['slack', 'discord', 'cron'].includes(String(item.source ?? item.platform)) ? String(item.source ?? item.platform) as 'slack' | 'discord' | 'cron' : 'chat',
@@ -273,6 +273,13 @@ export class HermesClient {
   async listSessions(limit = 50, offset = 0): Promise<HermesSession[]> {
     const response = HermesSessionListWire.parse(await this.request<unknown>(`/api/sessions?limit=${limit}&offset=${offset}`));
     return response.data.map((item) => this.normalizeSession(item));
+  }
+
+  async listProfileSessions(archived: 'exclude' | 'only', limit = 100): Promise<HermesSession[]> {
+    const response = record(await this.requestSessionResource<unknown>(
+      `/api/profiles/sessions?limit=${limit}&profile=all&archived=${archived}&order=recent`
+    ));
+    return (Array.isArray(response.sessions) ? response.sessions : []).map((item) => this.normalizeSession(item));
   }
 
   async getSession(sessionId: string, profileId?: string): Promise<HermesSession> {

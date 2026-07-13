@@ -62,13 +62,19 @@ export const getWorkspaceOverview = query(empty, async () => {
   const hermesToken = storedHermesToken ?? process.env.HERMES_API_TOKEN ?? '';
   const controlToken = storedControlToken ?? process.env.HERMES_CONTROL_TOKEN ?? await resolveServedLocalDashboardToken(effectiveConnection?.controlUrl) ?? '';
   const bridgeToken = storedBridgeToken ?? process.env.HERMES_BRIDGE_TOKEN ?? '';
-  const client = effectiveConnection && (current.connection.id !== effectiveConnection.id || current.connection.hermesProfileId !== effectiveConnection.hermesProfileId || storedHermesToken || controlToken || effectiveConnection !== connection)
+  // The persisted active connection owns the runtime client. Reusing a
+  // process-default client merely because its id/profile happen to match can
+  // retain stale agent, control, or Serve URLs after reload or reconnection.
+  const client = effectiveConnection
     ? setActiveHermesClient(effectiveConnection, hermesToken, controlToken)
     : current;
   if (effectiveConnection) setExecutionHostConnection(effectiveConnection, bridgeToken);
   const gateway = await client.probe();
   const [connections, storedProjects, worktrees, audit, approvalConfig, profilesPayload, pinnedSessionIds, unreadSessionIds] = await Promise.all([
-    repository.getConnections(), repository.listProjects(), repository.listWorktrees(), repository.recentAudit(20)
+    repository.getConnections(),
+    effectiveConnection ? repository.listProjects(effectiveConnection.id) : Promise.resolve([]),
+    effectiveConnection ? repository.listWorktrees(undefined, effectiveConnection.id) : Promise.resolve([]),
+    repository.recentAudit(20)
     , gateway.enhanced.config ? client.requestControl<Record<string, unknown>>('/api/config').catch(() => null) : Promise.resolve(null),
     gateway.enhanced.profiles ? client.requestAgent<{ profiles?: unknown[] }>('/api/profiles', {}, 30_000).catch(() => ({ profiles: [] })) : Promise.resolve({ profiles: [] }),
     repository.getPinnedSessionIds(), repository.getUnreadSessionIds()
@@ -99,35 +105,15 @@ export const getWorkspaceOverview = query(empty, async () => {
       // Keep recovery independent from the active-session page size. A single
       // `archived=include` page can contain 100 active rows and silently starve
       // every archived row, making restore impossible for a busy account.
-      const [activeResult, archivedResult] = await Promise.all([
-        client.requestAgent<{ sessions?: unknown[] }>('/api/profiles/sessions?limit=100&profile=all&archived=exclude&order=recent', {}, 30_000).catch(() => ({ sessions: [] })),
-        client.requestAgent<{ sessions?: unknown[] }>('/api/profiles/sessions?limit=100&profile=all&archived=only&order=recent', {}, 30_000).catch(() => ({ sessions: [] }))
+      const [activeSessions, archivedSessions] = await Promise.all([
+        client.listProfileSessions('exclude').catch(() => []),
+        client.listProfileSessions('only').catch(() => [])
       ]);
-      return [...(activeResult.sessions ?? []), ...(archivedResult.sessions ?? [])].map((value) => {
-        const item = asRecord(value);
-        const created = typeof item.created_at === 'number' ? item.created_at : typeof item.started_at === 'number' ? item.started_at : null;
-        const updated = typeof item.last_active_at === 'number' ? item.last_active_at : typeof item.updated_at === 'number' ? item.updated_at : created;
-        return HermesSession.parse({
-          id: item.id ?? item.session_id,
-          title: typeof item.title === 'string' && item.title.trim()
-            ? item.title.trim()
-            : typeof item.preview === 'string' && item.preview.trim()
-              ? item.preview.trim().slice(0, 120)
-              : 'Untitled session',
-          model: typeof item.model === 'string' ? item.model : null,
-          createdAt: created === null ? null : new Date(created * 1_000).toISOString(),
-          updatedAt: updated === null ? null : new Date(updated * 1_000).toISOString(),
-          messageCount: item.message_count,
-          archived: item.archived === true,
-          source: ['slack', 'discord', 'cron'].includes(String(item.source)) ? item.source : 'chat',
-          profileId: typeof item.profile === 'string' ? item.profile : activeProfileId,
-          provider: typeof item.provider === 'string' ? item.provider : null,
-          projectId: typeof item.project_id === 'string' ? item.project_id : null,
-          cwd: typeof item.cwd === 'string' ? item.cwd : null,
-          branch: typeof item.branch === 'string' ? item.branch : null,
-          environment: effectiveConnection.kind === 'remote' ? 'remote' : 'local'
-        });
-      });
+      return [...activeSessions, ...archivedSessions].map((session) => HermesSession.parse({
+        ...session,
+        profileId: session.profileId ?? activeProfileId,
+        environment: effectiveConnection.kind === 'remote' ? 'remote' : 'local'
+      }));
     }
     return client.listSessions();
   })().catch(() => []) : [];

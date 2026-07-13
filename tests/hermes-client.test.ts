@@ -40,6 +40,7 @@ const gateway = async (apiToken = '', controlToken = '') => {
     if (request.url === '/api/learning/graph') return response.end(JSON.stringify({ nodes: [], edges: [] }));
     if (request.url === '/api/curator') return response.end(JSON.stringify({ enabled: true }));
     if (request.url === '/api/hermes/update/check') return response.end(JSON.stringify({ update_available: false }));
+    if (request.url === '/api/profiles/sessions?limit=100&profile=all&archived=exclude&order=recent') return response.end(JSON.stringify({ sessions: [{ id: 's-profile', title: 'Profile session', profile: 'code', last_active_at: 1_720_000_000 }] }));
     if (request.url === '/api/sessions/search?q=hello&limit=12') return response.end(JSON.stringify({ results: [{ session_id: 's-1', lineage_root: 'root-1', model: 'hermes-3', role: 'assistant', snippet: 'Hello world', source: 'desktop', session_started: 123 }] }));
     if (request.url?.startsWith('/api/sessions')) {
       if (request.method === 'POST' && request.url === '/api/sessions') return response.end(JSON.stringify({ object: 'hermes.session', session: { id: 's-2', title: 'Created' } }));
@@ -94,6 +95,15 @@ describe('HermesClient', () => {
     expect(observedRequests.findLast((request) => request.url === '/api/sessions/s-1')?.authorization).toBeNull();
     expect(observedRequests.findLast((request) => request.url === '/api/config')?.authorization).toBeNull();
     expect(observedRequests.findLast((request) => request.url === '/v1/models')?.authorization).toBe('Bearer agent-secret');
+  });
+
+  it('routes profile session resources through the owning control surface', async () => {
+    const client = await gateway('agent-secret', 'dashboard-secret');
+    await expect(client.listProfileSessions('exclude')).resolves.toEqual([
+      expect.objectContaining({ id: 's-profile', profileId: 'code', updatedAt: new Date(1_720_000_000_000).toISOString() })
+    ]);
+    const request = observedRequests.findLast((item) => item.url.includes('/api/profiles/sessions'));
+    expect(request).toEqual(expect.objectContaining({ authorization: null, dashboardToken: 'dashboard-secret' }));
   });
 
   it('keeps a verified control-only host available as a partial connection', async () => {
