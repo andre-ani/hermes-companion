@@ -53,7 +53,9 @@ export const getAnnotationTaskEvents = query(annotationTask.extend({ after: z.nu
     if (result.status === 'completed') {
       const preview = (await repository.listPreviews(annotation.sourceWorktreeId))[0];
       if (preview) {
-        await invokeNative('preview.register', preview).then(() => invokeNative('preview.open', { leaseId: preview.id })).then(() => repository.recordAudit('annotation.preview.refreshed', annotationId, { previewId: preview.id, worktreeId: annotation.sourceWorktreeId })).catch(() => undefined);
+        // Register the refreshed preview, but do not attach a native view from a
+        // background annotation task. A visible, owner-bound dock must open it.
+        await invokeNative('preview.register', preview).then(() => repository.recordAudit('annotation.preview.refreshed', annotationId, { previewId: preview.id, worktreeId: annotation.sourceWorktreeId })).catch(() => undefined);
       }
     }
   }

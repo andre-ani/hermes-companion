@@ -94,7 +94,8 @@
   let dockTabs = $state<string[]>([]);
   let inspectorVisible = $state(false);
   let inspectorMode = $state<InspectorMode>('docked');
-  let inspectorOwner = $state('new');
+  let inspectorOwner = $state('profile:none:new');
+  let browserLeaseId = $state(crypto.randomUUID());
   let inspectorSessionState = $state<Record<string, InspectorSessionState>>({});
   let inspectorWidth = $state(480);
   let clock = $state(Date.now());
@@ -130,7 +131,7 @@
   // Project ownership enriches the composer; it does not silently replace the
   // conversation with a different-sized editor.
   const workspaceIsProjectScoped = $derived(Boolean(activeProject && !activeSessionId));
-  const inspectorOwnerKey = $derived(activeSessionId ?? (selectedProjectId ? `project:${selectedProjectId}` : 'new'));
+  const inspectorOwnerKey = $derived(`${overview?.activeProfileId ?? 'profile:none'}:${activeSessionId ?? (selectedProjectId ? `project:${selectedProjectId}` : 'new')}`);
   const activeWorkspaceBranch = $derived(activeWorktree
     ? { id: activeWorktree.worktreeId, branch: activeWorktree.branch }
     : draftWorktree
@@ -155,6 +156,7 @@
     if (owner === inspectorOwner) return;
     inspectorSessionState[inspectorOwner] = { visible: inspectorVisible, mode: inspectorMode, tab: dockTab, tabs: [...dockTabs] };
     inspectorOwner = owner;
+    browserLeaseId = crypto.randomUUID();
     const next = inspectorSessionState[owner] ?? { visible: false, mode: 'docked' as const, tab: 'surfaces', tabs: [] };
     inspectorVisible = next.visible;
     inspectorMode = next.mode;
@@ -699,7 +701,7 @@
   }
 
   async function exitFullscreenPreview() {
-    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: false })); }
+    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: inspectorOwnerKey, browserLeaseId })); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Could not leave full-screen preview.'; }
     finally { fullscreenPreview = false; }
   }
@@ -986,7 +988,7 @@
           {/if}
         </section>
       <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} bind:dockTab bind:openTabs={dockTabs} onchanged={loadWorkspace} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={loadWorkspace} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">

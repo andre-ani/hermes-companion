@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import * as Tabs from '$lib/components/ui/tabs';
   import * as Empty from '$lib/components/ui/empty';
   import * as Field from '$lib/components/ui/field';
@@ -17,7 +17,7 @@
   import { createWorktreeFileEntry, deleteWorktreeFileEntry, listWorktreeFiles, moveWorktreeFileEntry, previewWorktreeFile, readWorktreeFile, saveWorktreeFile, searchWorktreeFiles } from '$lib/client/remote/files.remote';
   import { listWorktreePreviews, reopenWorktreePreview, startWorktreePreview, stopWorktreePreview } from '$lib/client/remote/previews.remote';
   import { createWorktreeAnnotation, getAnnotationTaskEvents, listWorktreeAnnotations, startAnnotationTask } from '$lib/client/remote/annotations.remote';
-  import { controlBrowser, getBrowserStatus, openBrowserDevTools, openGeneralBrowser, setBrowserBounds, setBrowserFullscreen } from '$lib/client/remote/browser.remote';
+  import { claimBrowser, controlBrowser, getBrowserStatus, openBrowserDevTools, openGeneralBrowser, releaseBrowser, setBrowserBounds, setBrowserFullscreen } from '$lib/client/remote/browser.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import { listLocalServers } from '$lib/client/remote/local-servers.remote';
   import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, ChevronLeft, CircleAlert, CircleCheck, Code2, File, FilePlus2, Folder, FolderPlus, FolderTree, GitCompareArrows, Globe2, Maximize2, Pencil, Play, Plus, RotateCw, Save, Search, Terminal, Trash2, X } from '@lucide/svelte';
@@ -25,7 +25,7 @@
 
   type AnnotationTask = { id: string; route: string; note: string; taskStatus: 'queued' | 'starting' | 'running' | 'completed' | 'cancelled' | 'failed'; runId: string | null; lastEventSequence: number };
 
-  let { worktree = null, gitWorkspace = null, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean) => void; dockTab?: string; openTabs?: string[] } = $props();
+  let { worktree = null, gitWorkspace = null, browserOwnerKey, browserLeaseId, visible, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; browserOwnerKey: string; browserLeaseId: string; visible: boolean; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean) => void; dockTab?: string; openTabs?: string[] } = $props();
   const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : 'Files';
   const surfaceOptions = [{ id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
   let tabMenuOpen = $state(false);
@@ -59,7 +59,8 @@
   let annotationTaskPending = $state<string | null>(null);
   let removeAnnotationListener: (() => void) | null = null;
   let browserUrl = $state('');
-  let browserState = $state<{ open: boolean; kind: 'general' | 'preview' | null; url: string | null; fullscreen: boolean }>({ open: false, kind: null, url: null, fullscreen: false });
+  const closedBrowserState = () => ({ open: false, kind: null, url: null, fullscreen: false, ownerKey: null, browserLeaseId: null } as const);
+  let browserState = $state<{ open: boolean; kind: 'general' | 'preview' | null; url: string | null; fullscreen: boolean; ownerKey: string | null; browserLeaseId: string | null }>(closedBrowserState());
   let localServers = $state<Array<{ name: string; port: number; url: string }>>([]);
   let localServersPending = $state(false);
   let browserHost = $state<HTMLElement | null>(null);
@@ -173,16 +174,19 @@
     if (!worktree || previewPending) return;
     previewPending = true; error = '';
     try {
-      const lease = await resolveRemoteResult(startWorktreePreview({ worktreeId: worktree.worktreeId, origin: previewOrigin, designModeAllowed: designMode, ttlSeconds: 3_600 }));
+      const identity = browserIdentity();
+      await resolveRemoteResult(claimBrowser(identity));
+      const lease = await resolveRemoteResult(startWorktreePreview({ worktreeId: worktree.worktreeId, origin: previewOrigin, designModeAllowed: designMode, ttlSeconds: 3_600, ...identity }));
+      if (!isCurrentBrowserIdentity(identity)) return;
       previews = [lease, ...previews.filter((item) => item.id !== lease.id)];
-      browserState = { open: true, kind: 'preview', url: lease.relayUrl ?? lease.origin, fullscreen: false };
+      browserState = { open: true, kind: 'preview', url: lease.relayUrl ?? lease.origin, fullscreen: false, ...identity };
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Preview could not start.'; }
     finally { previewPending = false; }
   }
 
   async function reopenPreview(leaseId: string) {
     previewPending = true; error = '';
-    try { const lease = await resolveRemoteResult(reopenWorktreePreview({ leaseId })); browserState = { open: true, kind: 'preview', url: lease.relayUrl ?? lease.origin, fullscreen: false }; }
+    try { const identity = browserIdentity(); await resolveRemoteResult(claimBrowser(identity)); const lease = await resolveRemoteResult(reopenWorktreePreview({ leaseId, ...identity })); if (isCurrentBrowserIdentity(identity)) browserState = { open: true, kind: 'preview', url: lease.relayUrl ?? lease.origin, fullscreen: false, ...identity }; }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Preview could not open.'; }
     finally { previewPending = false; }
   }
@@ -246,9 +250,14 @@
   }
 
   async function loadBrowserStatus() {
-    try { const query = getBrowserStatus({}); await query.refresh(); browserState = await resolveRemoteResult(query); if (browserState.url) browserUrl = browserState.url; }
-    catch { browserState = { open: false, kind: null, url: null, fullscreen: false }; }
+    if (typeof window === 'undefined') return;
+    const identity = browserIdentity();
+    try { await resolveRemoteResult(claimBrowser(identity)); const query = getBrowserStatus(identity); await query.refresh(); const next = await resolveRemoteResult(query); if (!isCurrentBrowserIdentity(identity)) return; browserState = next; if (browserState.url) browserUrl = browserState.url; }
+    catch { if (isCurrentBrowserIdentity(identity)) browserState = closedBrowserState(); }
   }
+
+  function browserIdentity() { return { ownerKey: browserOwnerKey, browserLeaseId }; }
+  function isCurrentBrowserIdentity(identity: { ownerKey: string; browserLeaseId: string }) { return identity.ownerKey === browserOwnerKey && identity.browserLeaseId === browserLeaseId; }
 
   async function syncBrowserBounds() {
     if (!browserHost || !browserState.open || dockTab !== 'browser') return;
@@ -258,7 +267,7 @@
     const key = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
     if (key === lastBrowserBounds) return;
     lastBrowserBounds = key;
-    await resolveRemoteResult(setBrowserBounds(bounds)).catch(() => { lastBrowserBounds = ''; });
+    await resolveRemoteResult(setBrowserBounds({ ...bounds, ...browserIdentity() })).catch(() => { lastBrowserBounds = ''; });
   }
 
   function stopBrowserGeometrySync() {
@@ -284,7 +293,8 @@
 
   async function openWeb() {
     previewPending = true; error = '';
-    try { browserState = await resolveRemoteResult(openGeneralBrowser({ url: browserUrl })); await tick(); startBrowserGeometrySync(); }
+    const identity = browserIdentity();
+    try { await resolveRemoteResult(claimBrowser(identity)); const next = await resolveRemoteResult(openGeneralBrowser({ url: browserUrl, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; browserState = next; await tick(); startBrowserGeometrySync(); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Browser page could not open.'; }
     finally { previewPending = false; }
   }
@@ -302,22 +312,44 @@
   }
 
   async function browserAction(action: 'back' | 'forward' | 'reload' | 'close') {
-    try { if (action === 'close') stopBrowserGeometrySync(); const result = await resolveRemoteResult(controlBrowser({ action })); if ('open' in result) browserState = result; else if (action === 'close') browserState = { open: false, kind: null, url: null, fullscreen: false }; }
+    const identity = browserIdentity();
+    try { if (action === 'close') stopBrowserGeometrySync(); const result = await resolveRemoteResult(controlBrowser({ action, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; if ('open' in result) browserState = result; else if (action === 'close') browserState = closedBrowserState(); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Browser action failed.'; }
   }
 
+  async function releaseBrowserLease(ownerKey = browserOwnerKey, leaseId = browserLeaseId) {
+    if (typeof window === 'undefined') return;
+    stopBrowserGeometrySync();
+    await resolveRemoteResult(releaseBrowser({ ownerKey, browserLeaseId: leaseId })).catch(() => undefined);
+    if (ownerKey === browserOwnerKey && leaseId === browserLeaseId) browserState = closedBrowserState();
+  }
+
   async function enterFullscreen() {
-    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: true })); browserState.fullscreen = true; onfullscreenchange?.(true); }
+    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: true, ...browserIdentity() })); browserState.fullscreen = true; onfullscreenchange?.(true); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Full-screen preview failed.'; }
   }
   $effect(() => { worktree?.worktreeId; installAnnotationListener(); });
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const ownerKey = browserOwnerKey;
+    const leaseId = browserLeaseId;
+    return () => { untrack(() => { void releaseBrowserLease(ownerKey, leaseId); }); };
+  });
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const isBrowserVisible = visible && dockTab === 'browser';
+    const identity = browserIdentity();
+    untrack(() => {
+      if (isBrowserVisible) { void resolveRemoteResult(claimBrowser(identity)).catch(() => undefined); return; }
+      void releaseBrowserLease(identity.ownerKey, identity.browserLeaseId);
+    });
+  });
   $effect(() => {
     browserHostObserver?.disconnect(); browserHostObserver = null;
     if (browserHost) { browserHostObserver = new ResizeObserver(() => void syncBrowserBounds()); browserHostObserver.observe(browserHost); startBrowserGeometrySync(); }
     return () => { browserHostObserver?.disconnect(); browserHostObserver = null; };
   });
-  $effect(() => { if (dockTab !== 'browser' && browserState.open) void browserAction('close'); });
-  onDestroy(() => { removeAnnotationListener?.(); browserHostObserver?.disconnect(); stopBrowserGeometrySync(); if (annotationTaskTimer) clearTimeout(annotationTaskTimer); if (browserState.open) void browserAction('close'); });
+  onDestroy(() => { removeAnnotationListener?.(); browserHostObserver?.disconnect(); stopBrowserGeometrySync(); if (annotationTaskTimer) clearTimeout(annotationTaskTimer); void releaseBrowserLease(); });
 </script>
 
 {#if dockTab === 'surfaces'}
@@ -365,7 +397,7 @@
     <form class="browser-address" onsubmit={(event) => { event.preventDefault(); void openWeb(); }}>
       <div class="browser-nav"><Button type="button" size="icon-sm" variant="ghost" disabled={!browserState.open} onclick={() => browserAction('back')} aria-label="Browser back"><ArrowLeft /></Button><Button type="button" size="icon-sm" variant="ghost" disabled={!browserState.open} onclick={() => browserAction('forward')} aria-label="Browser forward"><ArrowRight /></Button><Button type="button" size="icon-sm" variant="ghost" disabled={!browserState.open} onclick={() => browserAction('reload')} aria-label="Reload browser"><RotateCw /></Button></div>
       <label for="browser-url" class="visually-hidden">Browser URL</label><Input id="browser-url" name="browser-url" type="url" bind:value={browserUrl} placeholder="Search or enter URL" required />
-      <div class="browser-tools"><Button type="button" size="icon-sm" variant="ghost" disabled={!browserState.open} onclick={() => void resolveRemoteResult(openBrowserDevTools({})).catch(() => undefined)} aria-label="Open browser DevTools" title="Open browser DevTools"><Code2 /></Button><Button type="submit" size="icon-sm" variant="ghost" disabled={previewPending || !browserUrl.trim()} aria-label="Open browser URL" title="Open browser URL"><ArrowUpRight /></Button></div>
+      <div class="browser-tools"><Button type="button" size="icon-sm" variant="ghost" disabled={!browserState.open} onclick={() => void resolveRemoteResult(openBrowserDevTools(browserIdentity())).catch(() => undefined)} aria-label="Open browser DevTools" title="Open browser DevTools"><Code2 /></Button><Button type="submit" size="icon-sm" variant="ghost" disabled={previewPending || !browserUrl.trim()} aria-label="Open browser URL" title="Open browser URL"><ArrowUpRight /></Button></div>
     </form>
     {#if !browserState.open}
       <section class="local-server-list" aria-labelledby="local-server-title">

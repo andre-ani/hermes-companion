@@ -24,10 +24,7 @@ let secretWriteQueue = Promise.resolve();
 const filePreviewTypes = new Map([['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.pdf', 'application/pdf']]);
 const validFilePreviewSignature = (mime, data) => mime === 'image/png' ? data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) : mime === 'image/jpeg' ? data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff : mime === 'image/gif' ? ['GIF87a', 'GIF89a'].includes(data.subarray(0, 6).toString('ascii')) : mime === 'image/webp' ? data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP' : data.subarray(0, 5).toString('ascii') === '%PDF-';
 let mainWindow;
-let browserView;
-let browserLayout = 'dock';
-let browserViewKind = null;
-let browserViewBounds = null;
+const browserViewController = { claim: null, view: null, kind: null, bounds: null, layout: 'dock' };
 let nativeServer;
 let rendererProcess;
 
@@ -316,17 +313,19 @@ async function dispatchNative(capability, input = {}) {
     case 'secret.get': return { value: await readSecret(input.key) };
     case 'secret.delete': await deleteSecret(input.key); return { ok: true };
     case 'preview.register': previewLeases.set(input.id, input); return { ok: true };
-    case 'preview.open': return openBrowserView(input.leaseId);
-    case 'browser.open': return openGeneralBrowser(input.url);
-    case 'browser.navigate': return navigateBrowser(input.url);
-    case 'browser.back': if (browserView?.webContents.navigationHistory.canGoBack()) browserView.webContents.navigationHistory.goBack(); return browserStatus();
-    case 'browser.forward': if (browserView?.webContents.navigationHistory.canGoForward()) browserView.webContents.navigationHistory.goForward(); return browserStatus();
-    case 'browser.reload': browserView?.webContents.reload(); return browserStatus();
-    case 'browser.close': closeBrowserView(); return { ok: true };
-    case 'browser.devtools': if (browserView && !browserView.webContents.isDestroyed()) browserView.webContents.openDevTools({ mode: 'detach' }); return { ok: Boolean(browserView) };
-    case 'browser.bounds': browserViewBounds = { x: input.x, y: input.y, width: input.width, height: input.height }; setViewBounds(); attachBrowserView(); return { ok: true };
-    case 'browser.layout': browserLayout = input.fullscreen ? 'fullscreen' : 'dock'; setViewBounds(); return { ok: true, fullscreen: browserLayout === 'fullscreen' };
-    case 'browser.status': return browserStatus();
+    case 'preview.open': return openBrowserView(input.leaseId, input.ownerKey, input.browserLeaseId);
+    case 'browser.claim': return claimBrowserView(input.ownerKey, input.browserLeaseId);
+    case 'browser.release': return releaseBrowserView(input.ownerKey, input.browserLeaseId);
+    case 'browser.open': return openGeneralBrowser(input.url, input.ownerKey, input.browserLeaseId);
+    case 'browser.navigate': return navigateBrowser(input.url, input.ownerKey, input.browserLeaseId);
+    case 'browser.back': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); if (view?.webContents.navigationHistory.canGoBack()) view.webContents.navigationHistory.goBack(); return browserStatus(input.ownerKey, input.browserLeaseId); }
+    case 'browser.forward': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); if (view?.webContents.navigationHistory.canGoForward()) view.webContents.navigationHistory.goForward(); return browserStatus(input.ownerKey, input.browserLeaseId); }
+    case 'browser.reload': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); view?.webContents.reload(); return browserStatus(input.ownerKey, input.browserLeaseId); }
+    case 'browser.close': closeBrowserView(input.ownerKey, input.browserLeaseId); return { ok: true };
+    case 'browser.devtools': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); if (view && !view.webContents.isDestroyed()) view.webContents.openDevTools({ mode: 'detach' }); return { ok: Boolean(view) }; }
+    case 'browser.bounds': requireBrowserClaim(input.ownerKey, input.browserLeaseId); browserViewController.bounds = { x: input.x, y: input.y, width: input.width, height: input.height }; setViewBounds(); attachBrowserView(); return { ok: true };
+    case 'browser.layout': requireBrowserClaim(input.ownerKey, input.browserLeaseId); browserViewController.layout = input.fullscreen ? 'fullscreen' : 'dock'; setViewBounds(); return { ok: true, fullscreen: browserViewController.layout === 'fullscreen' };
+    case 'browser.status': return browserStatus(input.ownerKey, input.browserLeaseId);
     case 'notification.status': return { supported: Notification.isSupported() };
     case 'notification.show': if (Notification.isSupported()) new Notification({ title: input.title, body: input.body }).show(); return { ok: true };
     default: throw new Error(`Unsupported native capability: ${capability}`);
@@ -348,63 +347,145 @@ async function startNativeServer() {
 }
 
 function setViewBounds() {
-  if (!mainWindow || !browserView) return;
+  const { view, bounds, layout } = browserViewController;
+  if (!mainWindow || !view) return;
   const [width, height] = mainWindow.getContentSize();
-  if (browserLayout === 'fullscreen') browserView.setBounds({ x: 0, y: 0, width, height: Math.max(200, height - 112) });
-  else if (browserViewBounds) browserView.setBounds({ x: Math.max(0, Math.round(browserViewBounds.x)), y: Math.max(0, Math.round(browserViewBounds.y)), width: Math.max(1, Math.min(width - Math.round(browserViewBounds.x), Math.round(browserViewBounds.width))), height: Math.max(1, Math.min(height - Math.round(browserViewBounds.y), Math.round(browserViewBounds.height))) });
+  if (layout === 'fullscreen') view.setBounds({ x: 0, y: 0, width, height: Math.max(200, height - 112) });
+  else if (bounds) view.setBounds({ x: Math.max(0, Math.round(bounds.x)), y: Math.max(0, Math.round(bounds.y)), width: Math.max(1, Math.min(width - Math.round(bounds.x), Math.round(bounds.width))), height: Math.max(1, Math.min(height - Math.round(bounds.y), Math.round(bounds.height))) });
 }
 
 function attachBrowserView() {
-  if (!mainWindow || !browserView || !browserViewBounds) return;
-  if (!mainWindow.contentView.children.includes(browserView)) mainWindow.contentView.addChildView(browserView);
+  const { view, bounds } = browserViewController;
+  if (!mainWindow || !view || !bounds) return;
+  if (!mainWindow.contentView.children.includes(view)) mainWindow.contentView.addChildView(view);
 }
 
 function validatedBrowserUrl(value) {
   const target = new URL(value); if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Browser URL must use HTTP or HTTPS.'); return target;
 }
 
-function browserStatus() {
-  return { open: Boolean(browserView), kind: browserViewKind, url: browserView && !browserView.webContents.isDestroyed() ? browserView.webContents.getURL() : null, fullscreen: browserLayout === 'fullscreen' };
+function validBrowserIdentity(ownerKey, browserLeaseId) {
+  if (typeof ownerKey !== 'string' || !ownerKey || typeof browserLeaseId !== 'string' || !browserLeaseId) throw new Error('Browser owner and lease are required.');
+  return { ownerKey, browserLeaseId };
 }
 
-function closeBrowserView() {
-  if (!browserView) return;
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(browserView);
-  if (!browserView.webContents.isDestroyed()) browserView.webContents.close();
-  browserView = null;
-  browserViewKind = null;
-  browserViewBounds = null;
+function sameBrowserIdentity(ownerKey, browserLeaseId) {
+  return browserViewController.claim?.ownerKey === ownerKey && browserViewController.claim?.browserLeaseId === browserLeaseId;
 }
 
-async function openGeneralBrowser(value) {
+function requireBrowserClaim(ownerKey, browserLeaseId) {
+  validBrowserIdentity(ownerKey, browserLeaseId);
+  if (!sameBrowserIdentity(ownerKey, browserLeaseId)) throw new Error('Browser lease is no longer active.');
+  return browserViewController.claim;
+}
+
+function requireOwnedBrowserView(ownerKey, browserLeaseId) {
+  requireBrowserClaim(ownerKey, browserLeaseId);
+  const view = browserViewController.view;
+  return view && !view.webContents.isDestroyed() ? view : null;
+}
+
+function destroyBrowserView(view = browserViewController.view) {
+  if (!view) return;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(view)) mainWindow.contentView.removeChildView(view);
+  if (!view.webContents.isDestroyed()) {
+    if (view.webContents.isDevToolsOpened()) view.webContents.closeDevTools();
+    view.webContents.close();
+  }
+  if (browserViewController.view === view) {
+    browserViewController.view = null;
+    browserViewController.kind = null;
+    browserViewController.bounds = null;
+    browserViewController.layout = 'dock';
+  }
+}
+
+function claimBrowserView(ownerKey, browserLeaseId) {
+  const identity = validBrowserIdentity(ownerKey, browserLeaseId);
+  if (!sameBrowserIdentity(ownerKey, browserLeaseId)) {
+    destroyBrowserView();
+    browserViewController.claim = identity;
+  }
+  return { ok: true };
+}
+
+function releaseBrowserView(ownerKey, browserLeaseId) {
+  validBrowserIdentity(ownerKey, browserLeaseId);
+  if (!sameBrowserIdentity(ownerKey, browserLeaseId)) return { ok: false };
+  destroyBrowserView();
+  browserViewController.claim = null;
+  return { ok: true };
+}
+
+function releaseAnyBrowserView() {
+  destroyBrowserView();
+  browserViewController.claim = null;
+}
+
+function browserStatus(ownerKey, browserLeaseId) {
+  validBrowserIdentity(ownerKey, browserLeaseId);
+  if (!sameBrowserIdentity(ownerKey, browserLeaseId)) return { open: false, kind: null, url: null, fullscreen: false, ownerKey: null, browserLeaseId: null };
+  const view = browserViewController.view;
+  const open = Boolean(view && !view.webContents.isDestroyed());
+  return { open, kind: open ? browserViewController.kind : null, url: open ? view.webContents.getURL() : null, fullscreen: open && browserViewController.layout === 'fullscreen', ownerKey, browserLeaseId };
+}
+
+function closeBrowserView(ownerKey, browserLeaseId) {
+  requireBrowserClaim(ownerKey, browserLeaseId);
+  destroyBrowserView();
+}
+
+function installOwnedView(view, kind, ownerKey, browserLeaseId) {
+  requireBrowserClaim(ownerKey, browserLeaseId);
+  browserViewController.view = view;
+  browserViewController.kind = kind;
+  view.webContents.once('destroyed', () => { if (browserViewController.view === view) destroyBrowserView(view); });
+  view.webContents.on('render-process-gone', () => { if (browserViewController.view === view) destroyBrowserView(view); });
+}
+
+async function openGeneralBrowser(value, ownerKey, browserLeaseId) {
+  requireBrowserClaim(ownerKey, browserLeaseId);
   const target = validatedBrowserUrl(value);
-  closeBrowserView();
+  destroyBrowserView();
   const isolatedSession = session.fromPartition(`web:${crypto.randomUUID()}`, { cache: false });
   isolatedSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  browserView = new WebContentsView({ webPreferences: { session: isolatedSession, contextIsolation: true, sandbox: true, nodeIntegration: false } }); browserViewKind = 'general';
-  browserView.webContents.setWindowOpenHandler(({ url }) => { void navigateBrowser(url); return { action: 'deny' }; });
-  await browserView.webContents.loadURL(target.toString()); return browserStatus();
+  const view = new WebContentsView({ webPreferences: { session: isolatedSession, contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  installOwnedView(view, 'general', ownerKey, browserLeaseId);
+  view.webContents.setWindowOpenHandler(({ url }) => { void navigateBrowser(url, ownerKey, browserLeaseId).catch(() => undefined); return { action: 'deny' }; });
+  try {
+    await view.webContents.loadURL(target.toString());
+    if (!sameBrowserIdentity(ownerKey, browserLeaseId) || browserViewController.view !== view) { destroyBrowserView(view); throw new Error('Browser lease changed while the page was loading.'); }
+    return browserStatus(ownerKey, browserLeaseId);
+  } catch (error) { if (browserViewController.view === view) destroyBrowserView(view); throw error; }
 }
 
-async function navigateBrowser(value) {
-  if (!browserView) return openGeneralBrowser(value);
-  const target = validatedBrowserUrl(value); await browserView.webContents.loadURL(target.toString()); return browserStatus();
+async function navigateBrowser(value, ownerKey, browserLeaseId) {
+  const view = requireOwnedBrowserView(ownerKey, browserLeaseId);
+  if (!view) return openGeneralBrowser(value, ownerKey, browserLeaseId);
+  const target = validatedBrowserUrl(value);
+  await view.webContents.loadURL(target.toString());
+  if (!sameBrowserIdentity(ownerKey, browserLeaseId) || browserViewController.view !== view) throw new Error('Browser lease changed while the page was loading.');
+  return browserStatus(ownerKey, browserLeaseId);
 }
 
-async function openBrowserView(leaseId) {
+async function openBrowserView(leaseId, ownerKey, browserLeaseId) {
+  requireBrowserClaim(ownerKey, browserLeaseId);
   const lease = previewLeases.get(leaseId);
   if (!lease || Date.parse(lease.expiresAt) <= Date.now()) throw new Error('Preview lease is missing or expired.');
   const target = new URL(lease.relayUrl || lease.origin);
   if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Preview must use HTTP or HTTPS.');
-  closeBrowserView();
+  destroyBrowserView();
   const previewSession = session.fromPartition(`preview:${lease.worktreeId}:${crypto.randomUUID()}`, { cache: false });
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  browserView = new WebContentsView({ webPreferences: { session: previewSession, contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preview-preload.cjs'), additionalArguments: lease.designModeAllowed ? ['--hermes-design-mode'] : [] } });
-  browserViewKind = 'preview';
-  browserView.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-  browserView.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== target.origin) event.preventDefault(); });
-  await browserView.webContents.loadURL(target.toString());
-  return { ok: true };
+  const view = new WebContentsView({ webPreferences: { session: previewSession, contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preview-preload.cjs'), additionalArguments: lease.designModeAllowed ? ['--hermes-design-mode'] : [] } });
+  installOwnedView(view, 'preview', ownerKey, browserLeaseId);
+  view.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  view.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== target.origin) event.preventDefault(); });
+  try {
+    await view.webContents.loadURL(target.toString());
+    if (!sameBrowserIdentity(ownerKey, browserLeaseId) || browserViewController.view !== view) { destroyBrowserView(view); throw new Error('Browser lease changed while the preview was loading.'); }
+    return browserStatus(ownerKey, browserLeaseId);
+  } catch (error) { if (browserViewController.view === view) destroyBrowserView(view); throw error; }
 }
 
 async function waitForRenderer(url, timeout = 20_000) {
@@ -429,6 +510,10 @@ function createWindow() {
   mainWindow = new BrowserWindow({ width: 1500, height: 940, minWidth: 960, minHeight: 680, backgroundColor: '#0d0f16', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 20, y: 17 } } : {}), webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') } });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) releaseAnyBrowserView(); });
+  mainWindow.webContents.on('render-process-gone', () => releaseAnyBrowserView());
+  mainWindow.on('close', () => releaseAnyBrowserView());
+  mainWindow.on('closed', () => { releaseAnyBrowserView(); mainWindow = null; });
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const toggleDevTools = input.key === 'F12' || (process.platform === 'darwin' ? input.meta && input.alt && input.key.toLowerCase() === 'i' : input.control && input.shift && input.key.toLowerCase() === 'i');
@@ -613,15 +698,17 @@ async function runAutomatedUat(window) {
     await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-connection.png'), discoveryScreenshot.toPNG());
     const browserFixtureUrl = process.env.HERMES_COMPANION_UAT_BROWSER_URL;
     if (!browserFixtureUrl) throw new Error('Electron UAT browser fixture URL is missing.');
-    await openGeneralBrowser(browserFixtureUrl);
-    const firstBrowserSession = await browserView.webContents.executeJavaScript(`(() => { document.cookie = 'companion-isolation=first-session; SameSite=Strict'; return { cookie: document.cookie, node: typeof require, companion: typeof window.companion }; })()`);
-    await openGeneralBrowser(browserFixtureUrl);
-    const secondBrowserSession = await browserView.webContents.executeJavaScript(`(() => ({ cookie: document.cookie, node: typeof require, companion: typeof window.companion }))()`);
-    const fullscreenBrowser = await dispatchNative('browser.layout', { fullscreen: true });
-    const browserEvidence = { firstBrowserSession, secondBrowserSession, fullscreenBrowser, status: browserStatus() };
+    const uatBrowserIdentity = { ownerKey: 'uat:browser', browserLeaseId: crypto.randomUUID() };
+    claimBrowserView(uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
+    await openGeneralBrowser(browserFixtureUrl, uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
+    const firstBrowserSession = await browserViewController.view.webContents.executeJavaScript(`(() => { document.cookie = 'companion-isolation=first-session; SameSite=Strict'; return { cookie: document.cookie, node: typeof require, companion: typeof window.companion }; })()`);
+    await openGeneralBrowser(browserFixtureUrl, uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
+    const secondBrowserSession = await browserViewController.view.webContents.executeJavaScript(`(() => ({ cookie: document.cookie, node: typeof require, companion: typeof window.companion }))()`);
+    const fullscreenBrowser = await dispatchNative('browser.layout', { ...uatBrowserIdentity, fullscreen: true });
+    const browserEvidence = { firstBrowserSession, secondBrowserSession, fullscreenBrowser, status: browserStatus(uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId) };
     checks.browserIsolation = /companion-isolation=first-session/.test(firstBrowserSession.cookie) && secondBrowserSession.cookie === '' && firstBrowserSession.node === 'undefined' && secondBrowserSession.node === 'undefined' && firstBrowserSession.companion === 'undefined' && secondBrowserSession.companion === 'undefined';
     checks.browserFullscreen = fullscreenBrowser.fullscreen === true && browserEvidence.status.fullscreen === true;
-    await dispatchNative('browser.close');
+    await dispatchNative('browser.release', uatBrowserIdentity);
     const repositoryEvidence = await dispatchNative('git.inspect', { repositoryPath });
     const initializedProjectPath = path.join(stateDir, 'new-project');
     await fsp.mkdir(initializedProjectPath, { recursive: true });
@@ -681,6 +768,7 @@ app.whenReady().then(async () => {
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', () => {
+  releaseAnyBrowserView();
   for (const state of terminals.values()) state.terminal.kill();
   rendererProcess?.kill(); nativeServer?.close();
   try { fs.unlinkSync(nativeDescriptorPath); } catch {}
