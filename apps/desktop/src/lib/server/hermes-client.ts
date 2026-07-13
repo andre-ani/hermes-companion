@@ -112,7 +112,6 @@ export function normalizeHermesSession(value: unknown): HermesSession {
 }
 
 export class HermesClient {
-  private sessionManagementAvailable = false;
   readonly connection;
 
   constructor(connection: GatewayConnection, private readonly token = '', private readonly controlToken = '') {
@@ -182,14 +181,15 @@ export class HermesClient {
   }
 
   async supportsSessionManagement() {
-    if (this.sessionManagementAvailable) return true;
-    const available = await this.endpointAvailable(
+    // This is intentionally a live capability probe. The control service can
+    // disappear or be downgraded independently of the agent connection, and
+    // caching a prior success would leave archive/restore actions enabled
+    // after that transition.
+    return this.endpointAvailable(
       '/api/profiles/sessions?limit=1&profile=all&archived=exclude&order=recent',
       'GET',
       Boolean(this.connection.controlUrl)
     );
-    if (available) this.sessionManagementAvailable = true;
-    return available;
   }
 
   private async endpointAvailable(path: string, method = 'GET', control = false): Promise<boolean> {

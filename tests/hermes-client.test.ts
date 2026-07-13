@@ -6,7 +6,7 @@ let server: Server | null = null;
 let observedRequests: Array<{ url: string; method: string; authorization: string | null; dashboardToken: string | null }> = [];
 afterEach(() => { observedRequests = []; return new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve()); });
 
-const gateway = async (apiToken = '', controlToken = '') => {
+const gateway = async (apiToken = '', controlToken = '', sessionManagementAvailable: () => boolean = () => true) => {
   server = createServer((request, response) => {
     observedRequests.push({ url: request.url ?? '', method: request.method ?? 'GET', authorization: typeof request.headers.authorization === 'string' ? request.headers.authorization : null, dashboardToken: typeof request.headers['x-hermes-session-token'] === 'string' ? request.headers['x-hermes-session-token'] : null });
     response.setHeader('content-type', 'application/json');
@@ -40,7 +40,10 @@ const gateway = async (apiToken = '', controlToken = '') => {
     if (request.url === '/api/learning/graph') return response.end(JSON.stringify({ nodes: [], edges: [] }));
     if (request.url === '/api/curator') return response.end(JSON.stringify({ enabled: true }));
     if (request.url === '/api/hermes/update/check') return response.end(JSON.stringify({ update_available: false }));
-    if (request.url?.startsWith('/api/profiles/sessions?')) return response.end(JSON.stringify({ sessions: [{ id: 's-profile', title: 'Profile session', profile: 'code', last_active_at: 1_720_000_000 }] }));
+    if (request.url?.startsWith('/api/profiles/sessions?')) {
+      if (!sessionManagementAvailable()) { response.statusCode = 404; return response.end('{}'); }
+      return response.end(JSON.stringify({ sessions: [{ id: 's-profile', title: 'Profile session', profile: 'code', last_active_at: 1_720_000_000 }] }));
+    }
     if (request.url === '/api/sessions/search?q=hello&limit=12') return response.end(JSON.stringify({ results: [{ session_id: 's-1', lineage_root: 'root-1', model: 'hermes-3', role: 'assistant', snippet: 'Hello world', source: 'desktop', session_started: 123 }] }));
     if (request.url?.startsWith('/api/sessions')) {
       if (request.method === 'POST' && request.url === '/api/sessions') return response.end(JSON.stringify({ object: 'hermes.session', session: { id: 's-2', title: 'Created' } }));
@@ -72,6 +75,16 @@ describe('HermesClient', () => {
     expect(status.enhanced.toolsets).toBe(true);
     expect(status.enhanced.messaging).toBe(true);
     expect(status.compatibility).toEqual(expect.objectContaining({ mode: 'verified', compatible: true, contract: 'hermes.api_server.capabilities/v1' }));
+  });
+
+  it('re-probes session management after the control service changes', async () => {
+    let managementAvailable = true;
+    const client = await gateway('', '', () => managementAvailable);
+
+    expect((await client.probe()).enhanced.sessionManagement).toBe(true);
+    managementAvailable = false;
+    expect((await client.probe()).enhanced.sessionManagement).toBe(false);
+    await expect(client.setSessionArchived('s-1', true)).rejects.toThrow('session-management service');
   });
 
   it('normalizes sessions, messages, models, and chat replies', async () => {
