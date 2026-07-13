@@ -724,6 +724,77 @@ async function runAutomatedUat(window) {
     checks.settings = openedSettings && settingsEvidence.search && settingsEvidence.pane === 'Settings';
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Close settings"]')?.click()`);
     await new Promise((resolve) => setTimeout(resolve, 150));
+    const selectedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Recover unavailable history'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('.session-empty-state')?.innerText?.includes('History unavailable')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedUnavailableActions = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Manage session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#session-title'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const renamedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#session-title'); if (!(input instanceof HTMLInputElement)) return false; input.value = 'Recovered lifecycle session'; input.dispatchEvent(new Event('input', { bubbles: true })); const save = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Save title'); save?.click(); return Boolean(save); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session') && !document.querySelector('#session-title')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const reopenedForArchive = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Manage session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Archive session')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const archivedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Archive session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session') && !document.querySelector('#session-title')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedArchivedFilter = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[aria-label="Group and filter sessions"]'); button?.click(); return Boolean(button); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const selectedArchivedFilter = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((entry) => entry.textContent?.trim() === 'Archived'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const selectedArchivedSession = await window.webContents.executeJavaScript(`(() => { const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Recovered lifecycle session'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('.session-empty-state')?.innerText?.includes('History unavailable')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedRestoreActions = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Manage session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Restore session')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const restoredUnavailableSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Restore session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session') && !document.querySelector('#session-title')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const reopenedArchivedFilter = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[aria-label="Group and filter sessions"]'); button?.click(); return Boolean(button); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const returnedToActiveFilter = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((entry) => entry.textContent?.trim() === 'Archived'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const selectedRestoredSession = await window.webContents.executeJavaScript(`(() => { const entry = [...document.querySelectorAll('.session-entry')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Recovered lifecycle session'); const button = entry?.querySelector('button'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`document.querySelector('.session-empty-state')?.innerText?.includes('History unavailable')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedDeleteActions = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Manage session'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Delete permanently')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const deletedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete permanently'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session') && !document.querySelector('#session-title')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const unavailableLifecycleEvidence = await window.webContents.executeJavaScript(`(() => ({ historyUnavailable: document.querySelector('.session-empty-state')?.innerText?.includes('History unavailable') ?? false, titlePresent: [...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session'), dialogOpen: Boolean(document.querySelector('#session-title')) }))()`);
+    checks.unavailableHistoryLifecycle = selectedUnavailableSession && openedUnavailableActions && renamedUnavailableSession && reopenedForArchive && archivedUnavailableSession && openedArchivedFilter && selectedArchivedFilter && selectedArchivedSession && openedRestoreActions && restoredUnavailableSession && reopenedArchivedFilter && returnedToActiveFilter && selectedRestoredSession && openedDeleteActions && deletedUnavailableSession && !unavailableLifecycleEvidence.titlePresent && !unavailableLifecycleEvidence.dialogOpen;
     const createdSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => item.innerText.trim() === 'New chat'); button?.click(); return Boolean(button); })()`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, header: document.querySelector('.header-context')?.textContent?.trim() ?? '', welcome: document.querySelector('.welcome-state')?.innerText ?? '', prompt: document.querySelector('#chat-prompt')?.value ?? null }))()`);
@@ -781,7 +852,7 @@ async function runAutomatedUat(window) {
     checks.nativeGitLifecycle = /Add UAT note/.test(initialCommit.stdout) && /Amend UAT note/.test(amendedCommit.stdout) && commitMetadata.subject === 'Amend UAT note' && typeof pushed.stdout === 'string' && typeof pushed.stderr === 'string' && githubStatus.installed && githubStatus.authenticated && existingPullRequest?.number === 1 && existingPullRequest?.isDraft === true && pullRequest.url === 'https://github.example.test/hermes-companion/uat/pull/1';
     await dispatchNative('git.worktree.remove', { repositoryPath, worktreePath, force: true });
     const ok = Object.values(checks).every(Boolean);
-    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, sessionEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
+    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, unavailableLifecycleEvidence, sessionEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
   } catch (error) { clearTimeout(timeout); await writeUatReport({ ok: false, platform: process.platform, rendererUrl, error: error instanceof Error ? error.message : String(error), capturedAt: new Date().toISOString() }); app.exit(1); }
 }
 

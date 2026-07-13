@@ -46,6 +46,12 @@ const secondarySession = {
   started_at: '2026-07-11T08:00:00.000Z', last_active: '2026-07-11T08:30:00.000Z',
   message_count: 2, archived: false, profile: 'default', profile_id: 'default', kind: 'chat'
 };
+const unavailableSession = {
+  id: 'uat-unavailable-session', title: 'Recover unavailable history', model: 'hermes-3-pro',
+  started_at: '2026-07-11T07:00:00.000Z', last_active: '2026-07-11T07:30:00.000Z',
+  message_count: 2, archived: false, profile: 'default', profile_id: 'default', kind: 'chat'
+};
+let unavailableSessionDeleted = false;
 let createdSessionCount = 0;
 const dashboardSessionToken = 'uat-dashboard-session-token-1234';
 const serveSocket = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -57,6 +63,10 @@ serveSocket.on('connection', (socket) => socket.on('message', (raw) => {
   const reply = (result) => socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }));
   if (request.method === 'session.resume') {
     const sessionId = request.params?.session_id;
+    if (sessionId === 'uat-unavailable-session') {
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { message: 'History fixture unavailable.' } }));
+      return;
+    }
     if (sessionId === 'uat-secondary-session') return reply({ session_id: sessionId, messages: [
       { id: 'uat-secondary-message-1', role: 'user', content: 'Keep this session layout independent.', timestamp: '2026-07-11T08:28:00.000Z' },
       { id: 'uat-secondary-message-2', role: 'assistant', content: 'This session starts with its own closed workspace dock.', timestamp: '2026-07-11T08:30:00.000Z' }
@@ -76,6 +86,11 @@ serveSocket.on('connection', (socket) => socket.on('message', (raw) => {
 const mockHermes = createHttpServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://hermes-uat');
   const reply = (status, value) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
+  const readJson = async () => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    return chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+  };
   if (url.pathname === '/') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return response.end(`<script>window.__HERMES_SESSION_TOKEN__=${JSON.stringify(dashboardSessionToken)};</script>`); }
   if (url.pathname === '/uat/browser') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return response.end('<!doctype html><html><body>Isolated browser fixture</body></html>'); }
   if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/sessions') && !['/api/status', '/api/config/defaults', '/api/config/schema', '/api/model/info'].includes(url.pathname) && request.headers['x-hermes-session-token'] !== dashboardSessionToken) return reply(401, { detail: 'Invalid dashboard session token' });
@@ -91,9 +106,11 @@ const mockHermes = createHttpServer(async (request, response) => {
   });
   if (url.pathname === '/health') return reply(200, { status: 'ok' });
   if (url.pathname === '/v1/models') return reply(200, { object: 'list', data: [{ id: 'hermes-3-pro', name: 'Hermes 3 Pro', provider: 'Hermes' }] });
-  if (request.method === 'GET' && url.pathname === '/api/sessions') return reply(200, { object: 'list', data: [session, secondarySession] });
+  if (request.method === 'GET' && url.pathname === '/api/sessions') return reply(200, { object: 'list', data: [session, secondarySession, ...(!unavailableSessionDeleted ? [unavailableSession] : [])] });
   if (request.method === 'GET' && url.pathname === '/api/profiles/sessions') return reply(200, {
-    sessions: url.searchParams.get('archived') === 'only' ? [] : [session, secondarySession]
+    sessions: url.searchParams.get('archived') === 'only'
+      ? (!unavailableSessionDeleted && unavailableSession.archived ? [unavailableSession] : [])
+      : [session, secondarySession, ...(!unavailableSessionDeleted && (url.searchParams.get('archived') === 'include' || !unavailableSession.archived) ? [unavailableSession] : [])]
   });
   if (request.method === 'GET' && url.pathname === '/api/sessions/search') return reply(200, { object: 'list', results: [
     { session_id: 'uat-session', lineage_root: null, model: 'hermes-3-pro', role: 'assistant', snippet: 'Preview relay search result', source: 'history', session_started: '2026-07-11T09:00:00.000Z' }
@@ -103,6 +120,18 @@ const mockHermes = createHttpServer(async (request, response) => {
   } }); }
   if (request.method === 'GET' && url.pathname === '/api/sessions/uat-session') return reply(200, session);
   if (request.method === 'GET' && url.pathname === '/api/sessions/uat-secondary-session') return reply(200, secondarySession);
+  if (request.method === 'GET' && url.pathname === '/api/sessions/uat-unavailable-session') return unavailableSessionDeleted ? reply(404, { detail: 'Session not found' }) : reply(200, unavailableSession);
+  if (request.method === 'PATCH' && url.pathname === '/api/sessions/uat-unavailable-session') {
+    if (unavailableSessionDeleted) return reply(404, { detail: 'Session not found' });
+    const update = await readJson();
+    if (typeof update.title === 'string') unavailableSession.title = update.title;
+    if (typeof update.archived === 'boolean') unavailableSession.archived = update.archived;
+    return reply(200, { ok: true, title: unavailableSession.title, archived: unavailableSession.archived });
+  }
+  if (request.method === 'DELETE' && url.pathname === '/api/sessions/uat-unavailable-session') {
+    unavailableSessionDeleted = true;
+    return reply(200, { ok: true });
+  }
   if (url.pathname === '/api/sessions/uat-session/messages') return reply(200, {
     object: 'list', session_id: 'uat-session', data: [
       { id: 'uat-message-1', role: 'user', content: 'Inspect the authenticated preview relay and confirm worktree isolation.', timestamp: '2026-07-11T09:58:00.000Z' },

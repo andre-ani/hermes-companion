@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { setActiveHermesClient } from '../apps/desktop/src/lib/server/hermes-client';
-import { cancelHermesChatTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '../apps/desktop/src/lib/server/hermes-chat-runs';
+import { cancelHermesChatTurn, cancelHermesSessionTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '../apps/desktop/src/lib/server/hermes-chat-runs';
 
 const servers: WebSocketServer[] = [];
 
@@ -273,8 +273,11 @@ describe('Hermes chat streaming', () => {
     expect(getHermesChatTurnRecovery('stable-recovery', 'other-profile')).toBeNull();
 
     await expect(startHermesChatTurn({ requestId: crypto.randomUUID(), sessionId: 'stable-recovery', profileId: 'hermes-code', message: 'Duplicate' })).rejects.toThrow('already has an active response');
-    await expect(cancelHermesChatTurn(requestId)).resolves.toBe(true);
-    expect(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')).toMatchObject({ snapshot: { requestId, status: 'cancelled' } });
+    await expect(cancelHermesSessionTurn({ sessionId: 'stable-recovery', connectionId: 'other-connection', profileId: 'hermes-code' })).resolves.toBe(false);
+    expect(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')).toMatchObject({ snapshot: { requestId, status: 'streaming' } });
+    await expect(cancelHermesSessionTurn({ sessionId: 'stable-recovery', connectionId: 'recovery-owner', profileId: 'hermes-code' })).resolves.toBe(true);
+    expect(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')).toBeNull();
+    await expect(nextHermesChatTurn(requestId, 0)).resolves.toMatchObject({ requestId, status: 'cancelled' });
 
     const replacementId = crypto.randomUUID();
     await expect(startHermesChatTurn({ requestId: replacementId, sessionId: 'stable-recovery', profileId: 'hermes-code', message: 'Continue after stop' })).resolves.toMatchObject({ requestId: replacementId, status: 'streaming' });

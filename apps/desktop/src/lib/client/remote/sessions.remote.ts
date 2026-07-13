@@ -2,7 +2,7 @@ import { command, query } from '$app/server';
 import { ChatTurnControl, ChatTurnSnapshot, ContextUsage, HermesMessage, z } from '@hermes-companion/contracts';
 import { getCompanionRepository } from '$lib/server/companion-repository';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
-import { cancelHermesChatTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '$lib/server/hermes-chat-runs';
+import { cancelHermesChatTurn, cancelHermesSessionTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '$lib/server/hermes-chat-runs';
 import { requestHermesServe } from '$lib/server/hermes-serve-runs';
 
 const sessionId = z.object({ sessionId: z.string().min(1), profileId: z.string().min(1).optional() });
@@ -91,21 +91,32 @@ export const createSession = command(z.object({ title: z.string().trim().max(200
 });
 
 export const renameSession = command(sessionId.extend({ title: z.string().trim().min(1).max(200) }), async ({ sessionId, profileId, title }) => {
-  const session = await getActiveHermesClient().updateSession(sessionId, title, profileId);
-  await getCompanionRepository().recordAudit('hermes.session.renamed', sessionId);
-  return session;
+  await getActiveHermesClient().updateSession(sessionId, title, profileId);
+  await getCompanionRepository().recordAudit('hermes.session.renamed', sessionId).catch(() => undefined);
+  return { ok: true as const, title };
 });
 
 export const deleteSession = command(sessionId, async ({ sessionId, profileId }) => {
-  await getActiveHermesClient().deleteSession(sessionId, profileId);
-  await getCompanionRepository().recordAudit('hermes.session.deleted', sessionId);
+  const client = getActiveHermesClient();
+  const connection = client.executionContext().connection;
+  const ownerProfileId = profileId ?? connection.hermesProfileId ?? 'default';
+  await cancelHermesSessionTurn({ sessionId, connectionId: connection.id, profileId: ownerProfileId });
+  await client.deleteSession(sessionId, profileId);
+  const repository = getCompanionRepository();
+  await repository.clearSessionPresentationState(sessionId, connection.id, ownerProfileId).catch(() => undefined);
+  await repository.recordAudit('hermes.session.deleted', sessionId).catch(() => undefined);
   return { ok: true as const };
 });
 
 export const setSessionArchived = command(sessionId.extend({ archived: z.boolean() }), async ({ sessionId, profileId, archived }) => {
+  const client = getActiveHermesClient();
+  const connection = client.executionContext().connection;
+  const ownerProfileId = profileId ?? connection.hermesProfileId ?? 'default';
+  if (!(await client.supportsSessionManagement())) throw new Error('Archive requires the Hermes session-management service for this connection.');
+  if (archived) await cancelHermesSessionTurn({ sessionId, connectionId: connection.id, profileId: ownerProfileId });
   const repository = getCompanionRepository();
-  await getActiveHermesClient().setSessionArchived(sessionId, archived, profileId);
-  await repository.recordAudit(archived ? 'hermes.session.archived' : 'hermes.session.restored', sessionId);
+  await client.setSessionArchived(sessionId, archived, profileId);
+  await repository.recordAudit(archived ? 'hermes.session.archived' : 'hermes.session.restored', sessionId).catch(() => undefined);
   return { ok: true as const };
 });
 

@@ -3,12 +3,12 @@ import { createServer, type Server } from 'node:http';
 import { HermesClient } from '../apps/desktop/src/lib/server/hermes-client';
 
 let server: Server | null = null;
-let observedRequests: Array<{ url: string; authorization: string | null; dashboardToken: string | null }> = [];
+let observedRequests: Array<{ url: string; method: string; authorization: string | null; dashboardToken: string | null }> = [];
 afterEach(() => { observedRequests = []; return new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve()); });
 
 const gateway = async (apiToken = '', controlToken = '') => {
   server = createServer((request, response) => {
-    observedRequests.push({ url: request.url ?? '', authorization: typeof request.headers.authorization === 'string' ? request.headers.authorization : null, dashboardToken: typeof request.headers['x-hermes-session-token'] === 'string' ? request.headers['x-hermes-session-token'] : null });
+    observedRequests.push({ url: request.url ?? '', method: request.method ?? 'GET', authorization: typeof request.headers.authorization === 'string' ? request.headers.authorization : null, dashboardToken: typeof request.headers['x-hermes-session-token'] === 'string' ? request.headers['x-hermes-session-token'] : null });
     response.setHeader('content-type', 'application/json');
     if (request.url === '/v1/capabilities') return response.end(JSON.stringify({
       object: 'hermes.api_server.capabilities',
@@ -40,7 +40,7 @@ const gateway = async (apiToken = '', controlToken = '') => {
     if (request.url === '/api/learning/graph') return response.end(JSON.stringify({ nodes: [], edges: [] }));
     if (request.url === '/api/curator') return response.end(JSON.stringify({ enabled: true }));
     if (request.url === '/api/hermes/update/check') return response.end(JSON.stringify({ update_available: false }));
-    if (request.url === '/api/profiles/sessions?limit=100&profile=all&archived=exclude&order=recent') return response.end(JSON.stringify({ sessions: [{ id: 's-profile', title: 'Profile session', profile: 'code', last_active_at: 1_720_000_000 }] }));
+    if (request.url?.startsWith('/api/profiles/sessions?')) return response.end(JSON.stringify({ sessions: [{ id: 's-profile', title: 'Profile session', profile: 'code', last_active_at: 1_720_000_000 }] }));
     if (request.url === '/api/sessions/search?q=hello&limit=12') return response.end(JSON.stringify({ results: [{ session_id: 's-1', lineage_root: 'root-1', model: 'hermes-3', role: 'assistant', snippet: 'Hello world', source: 'desktop', session_started: 123 }] }));
     if (request.url?.startsWith('/api/sessions')) {
       if (request.method === 'POST' && request.url === '/api/sessions') return response.end(JSON.stringify({ object: 'hermes.session', session: { id: 's-2', title: 'Created' } }));
@@ -66,6 +66,7 @@ describe('HermesClient', () => {
     expect(status.status).toBe('enhanced');
     expect(status.core.models).toBe(true);
     expect(status.enhanced.sessions).toBe(true);
+    expect(status.enhanced.sessionManagement).toBe(true);
     expect(status.enhanced.memory).toBe(true);
     expect(status.enhanced.credentials).toBe(true);
     expect(status.enhanced.toolsets).toBe(true);
@@ -87,7 +88,7 @@ describe('HermesClient', () => {
     const client = await gateway('agent-secret', 'dashboard-secret');
     await expect(client.requestControl('/api/config', { method: 'PUT', body: JSON.stringify({ config: {} }) })).resolves.toEqual({ ok: true });
     await expect(client.setSessionArchived('s-1', true)).resolves.toBeUndefined();
-    await expect(client.updateSession('s-1', 'Renamed', 'code')).resolves.toEqual(expect.objectContaining({ id: 's-1', title: 'Renamed', profileId: 'code' }));
+    await expect(client.updateSession('s-1', 'Renamed', 'code')).resolves.toBeUndefined();
     await expect(client.requestControl('/private/config')).rejects.toThrow('/api path');
     await client.listModels();
     expect(observedRequests.findLast((request) => request.url === '/api/config')?.dashboardToken).toBe('dashboard-secret');
@@ -95,6 +96,7 @@ describe('HermesClient', () => {
     expect(observedRequests.findLast((request) => request.url === '/api/sessions/s-1')?.authorization).toBeNull();
     expect(observedRequests.findLast((request) => request.url === '/api/config')?.authorization).toBeNull();
     expect(observedRequests.findLast((request) => request.url === '/v1/models')?.authorization).toBe('Bearer agent-secret');
+    expect(observedRequests.some((request) => request.method === 'GET' && request.url === '/api/sessions/s-1?profile=code')).toBe(false);
   });
 
   it('routes profile session resources through the owning control surface', async () => {
@@ -124,5 +126,37 @@ describe('HermesClient', () => {
     expect(status.enhanced.operations).toBe(true);
     expect(status.core.health).toBe(false);
     expect(status.error).toBeNull();
+  });
+
+  it('truthfully rejects management-only lifecycle assumptions on an agent-only surface', async () => {
+    server = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.statusCode = 404;
+      response.end(JSON.stringify({ detail: 'Not found' }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test agent did not bind.');
+    const url = `http://127.0.0.1:${address.port}`;
+    const client = new HermesClient({ id: 'agent-only', name: 'Agent only', kind: 'local', url, controlUrl: null, hermesProfileId: 'default' });
+
+    await expect(client.setSessionArchived('stale-session', true, 'default')).rejects.toThrow('session-management service');
+    await expect(client.deleteSession('stale-session', 'default')).rejects.toThrow();
+  });
+
+  it('treats an already-absent management-owned session as deleted', async () => {
+    server = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url?.startsWith('/api/profiles/sessions?')) return response.end(JSON.stringify({ sessions: [] }));
+      response.statusCode = 404;
+      response.end(JSON.stringify({ detail: 'Not found' }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test management service did not bind.');
+    const url = `http://127.0.0.1:${address.port}`;
+    const client = new HermesClient({ id: 'management', name: 'Management', kind: 'local', url, controlUrl: url, hermesProfileId: 'default' });
+
+    await expect(client.deleteSession('stale-session', 'default')).resolves.toBeUndefined();
   });
 });

@@ -53,6 +53,26 @@ describe('CompanionRepository', () => {
     });
   });
 
+  it('clears companion-owned session presentation state after authoritative deletion', async () => {
+    const repo = await repository();
+    const session = { connectionId: 'railway', profileId: 'code', resource: { kind: 'session' as const, id: 'deleted-session' } };
+    await repo.setSessionPinned('deleted-session', true);
+    await repo.setSessionUnread('deleted-session', true);
+    await repo.setWorkspaceLayout(session, {
+      inspector: { visible: true, mode: 'docked', activeTab: 'files', openTabs: ['files'], width: 520 },
+      terminal: { visible: true, height: 320 }
+    });
+
+    await repo.clearSessionPresentationState('deleted-session', 'railway', 'code');
+
+    expect(await repo.getPinnedSessionIds()).toEqual([]);
+    expect(await repo.getUnreadSessionIds()).toEqual([]);
+    expect(await repo.getWorkspaceLayout(session)).toMatchObject({
+      inspector: { visible: false, activeTab: 'surfaces', openTabs: [] },
+      terminal: { visible: false }
+    });
+  });
+
   it('recovers one malformed workspace layout without resetting other companion state', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'hermes-companion-')); paths.push(directory); const file = join(directory, 'state.json');
     const validOwner = { connectionId: 'default', profileId: 'default', resource: { kind: 'session' as const, id: 'valid' } };

@@ -327,6 +327,7 @@ export const CoreCapabilities = z.object({
 
 export const EnhancedCapabilities = z.object({
   sessions: z.boolean(),
+  sessionManagement: z.boolean().default(false),
   enhancedChat: z.boolean(),
   profiles: z.boolean(),
   memory: z.boolean(),

@@ -32,7 +32,6 @@ const CompanionState = z.object({
   desktopPreferences: DesktopPreferences.default(DesktopPreferences.parse({})),
   workspaceLayouts: z.record(z.string(), StoredWorkspaceLayout).default({}),
   pinnedSessionIds: z.array(z.string()).default([]),
-  archivedSessionIds: z.array(z.string()).default([]),
   unreadSessionIds: z.array(z.string()).default([]),
   audit: z.array(AuditEvent)
 });
@@ -52,7 +51,7 @@ const initialState = (): CompanionState => ({
     bridgeUrl: process.env.HERMES_BRIDGE_URL ?? null,
     hermesProfileId: null
   }],
-  projects: [], worktrees: [], runs: [], annotations: [], previews: [], profileUi: {}, desktopPreferences: DesktopPreferences.parse({}), workspaceLayouts: {}, pinnedSessionIds: [], archivedSessionIds: [], unreadSessionIds: [], audit: []
+  projects: [], worktrees: [], runs: [], annotations: [], previews: [], profileUi: {}, desktopPreferences: DesktopPreferences.parse({}), workspaceLayouts: {}, pinnedSessionIds: [], unreadSessionIds: [], audit: []
 });
 
 export class CompanionRepository {
@@ -179,16 +178,7 @@ export class CompanionRepository {
     return { ok: true as const };
   }
 
-  async getArchivedSessionIds() { return (await this.load()).archivedSessionIds; }
   async getUnreadSessionIds() { return (await this.load()).unreadSessionIds; }
-
-  async setSessionArchiveOverride(sessionId: string, archived: boolean) {
-    const state = await this.load();
-    state.archivedSessionIds = archived
-      ? [...new Set([...state.archivedSessionIds, sessionId])]
-      : state.archivedSessionIds.filter((id) => id !== sessionId);
-    await this.persist();
-  }
 
   async setSessionUnread(sessionId: string, unread: boolean) {
     const state = await this.load();
@@ -206,6 +196,18 @@ export class CompanionRepository {
     this.addAuditToState(state, pinned ? 'session.pinned' : 'session.unpinned', sessionId);
     await this.persist();
     return { sessionId, pinned };
+  }
+
+  async clearSessionPresentationState(sessionId: string, connectionId: string, profileId: string) {
+    const state = await this.load();
+    state.pinnedSessionIds = state.pinnedSessionIds.filter((id) => id !== sessionId);
+    state.unreadSessionIds = state.unreadSessionIds.filter((id) => id !== sessionId);
+    delete state.workspaceLayouts[workspaceLayoutOwnerKey({
+      connectionId,
+      profileId,
+      resource: { kind: 'session', id: sessionId }
+    })];
+    await this.persist();
   }
 
   async listProjects(connectionId?: string) {

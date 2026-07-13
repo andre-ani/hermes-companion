@@ -11,13 +11,13 @@
 
   let {
     sessions = [], projects = [], projectTree = [], hydratedProjects = {}, projectLoadingIds = [], worktrees = [], connections = [], pinnedSessionIds = [], activeSessionId = null,
-    selectedProjectId = null, activeProfileId = 'default', presentation = 'chats', filter = null, loading = false,
+    selectedProjectId = null, activeProfileId = 'default', presentation = 'chats', filter = null, loading = false, archiveAvailable = false,
     onselectsession, onselectproject, onnewproject, onnewsession, onnewworktree, onremoveworktree, onprojectexpand, onprojectactions, onprojectarchive, onactions, onarchive, ontogglepinned, oncopytranscript, onmarkunread,
     onpresentationchange, onfilterchange, oncollapseall
   }: {
     sessions?: HermesSession[]; projects?: ProjectBinding[]; projectTree?: HermesProjectTreeNode[]; hydratedProjects?: Record<string, HermesProjectTreeNode>; projectLoadingIds?: string[]; worktrees?: WorktreeRecord[]; connections?: GatewayConnection[];
     pinnedSessionIds?: string[]; activeSessionId?: string | null; selectedProjectId?: string | null; activeProfileId?: string; presentation?: SessionPresentation;
-    filter?: SessionTreeFilter | null; loading?: boolean; onselectsession?: (id: string, projectId?: string) => void;
+    filter?: SessionTreeFilter | null; loading?: boolean; archiveAvailable?: boolean; onselectsession?: (id: string, projectId?: string) => void;
     onselectproject?: (id: string) => void; onnewproject?: () => void; onnewsession?: (project?: ProjectBinding) => void; onnewworktree?: (id: string, repositoryPaths: string[]) => void; onremoveworktree?: (target: { projectId: string; repositoryPath: string; worktreePath: string; branch: string }) => void; onprojectexpand?: (id: string) => void;
     onprojectactions?: (id: string) => void; onprojectarchive?: (id: string) => void;
     onactions?: (id: string) => void; onarchive?: (id: string) => void; ontogglepinned?: (id: string) => void; oncopytranscript?: (id: string) => void; onmarkunread?: (id: string, unread: boolean) => void; onpresentationchange?: (value: SessionPresentation) => void;
@@ -224,7 +224,7 @@
           </HoverCard.Root>
           <span class="session-row-actions" aria-label={`Quick actions for ${session.title}`}>
             <Button size="icon-xs" variant="ghost" onclick={() => ontogglepinned?.(session.id)} aria-label={pinnedSessionIds.includes(session.id) ? `Unpin ${session.title}` : `Pin ${session.title}`} title={pinnedSessionIds.includes(session.id) ? 'Unpin' : 'Pin'}><Pin /></Button>
-            <Button size="icon-xs" variant="ghost" onclick={() => onarchive?.(session.id)} aria-label={session.archived ? `Restore ${session.title}` : `Archive ${session.title}`} title={session.archived ? 'Restore' : 'Archive'}><Archive /></Button>
+            {#if archiveAvailable}<Button size="icon-xs" variant="ghost" onclick={() => onarchive?.(session.id)} aria-label={session.archived ? `Restore ${session.title}` : `Archive ${session.title}`} title={session.archived ? 'Restore' : 'Archive'}><Archive /></Button>{/if}
           </span>
         </li>
       {/snippet}
@@ -238,8 +238,10 @@
         {#if session.branch}<ContextMenu.Item onSelect={() => void navigator.clipboard.writeText(session.branch!)}><GitBranch />Copy Branch</ContextMenu.Item>{/if}
         <ContextMenu.Item onSelect={() => oncopytranscript?.(session.id)}><FileText />Copy Transcript</ContextMenu.Item>
       </ContextMenu.SubContent></ContextMenu.Sub>
-      <ContextMenu.Separator />
-      <ContextMenu.Item onSelect={() => onarchive?.(session.id)}><Archive />{session.archived ? 'Restore' : 'Archive'}</ContextMenu.Item>
+      {#if archiveAvailable}
+        <ContextMenu.Separator />
+        <ContextMenu.Item onSelect={() => onarchive?.(session.id)}><Archive />{session.archived ? 'Restore' : 'Archive'}</ContextMenu.Item>
+      {/if}
     </ContextMenu.Content>
   </ContextMenu.Root>
 {/snippet}

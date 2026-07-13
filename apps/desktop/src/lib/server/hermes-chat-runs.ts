@@ -435,6 +435,20 @@ export async function cancelHermesChatTurn(requestId: string) {
   return true;
 }
 
+export async function cancelHermesSessionTurn(owner: { sessionId: string; connectionId: string; profileId: string }) {
+  const key = sessionClaimKey(owner.connectionId, owner.profileId, owner.sessionId);
+  const requestId = sessionClaims.get(key);
+  if (!requestId) return false;
+  const run = runs.get(requestId);
+  if (!run || run.owner.connectionId !== owner.connectionId || run.owner.profileId !== owner.profileId || run.sessionId !== owner.sessionId) return false;
+  const cancelled = await cancelHermesChatTurn(requestId);
+  // The request-id snapshot remains briefly available so an attached renderer
+  // can observe cancellation, but this session is no longer recoverable or
+  // blocked by the retired claim after a lifecycle transition.
+  if (sessionClaims.get(key) === requestId) sessionClaims.delete(key);
+  return cancelled;
+}
+
 export async function respondHermesChatApproval(requestId: string, choice: 'once' | 'session' | 'always' | 'deny') {
   const run = runs.get(requestId);
   if (!run || run.terminal) throw new Error('This Hermes response is no longer active.');

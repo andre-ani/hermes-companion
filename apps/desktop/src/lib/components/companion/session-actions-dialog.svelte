@@ -9,7 +9,7 @@
   import { CircleAlert } from '@lucide/svelte';
   import type { HermesSession } from '@hermes-companion/contracts';
 
-  let { open = $bindable(false), session, onchanged, ondeleted }: { open?: boolean; session: HermesSession | null; onchanged?: () => void; ondeleted?: (sessionId: string) => void } = $props();
+  let { open = $bindable(false), session, archiveAvailable = false, onchanged, ondeleted }: { open?: boolean; session: HermesSession | null; archiveAvailable?: boolean; onchanged?: () => void; ondeleted?: (sessionId: string) => void } = $props();
   let title = $state('');
   let pending = $state('');
   let error = $state('');
@@ -36,10 +36,10 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>Session actions</Dialog.Title><Dialog.Description>Rename, archive, or permanently delete the active Hermes session.</Dialog.Description></Dialog.Header>
+  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>Session actions</Dialog.Title><Dialog.Description>Rename or permanently delete the selected Hermes session.</Dialog.Description></Dialog.Header>
     {#if error}<Alert.Root variant="destructive"><CircleAlert /><Alert.Title>Session action failed</Alert.Title><Alert.Description>{error}</Alert.Description></Alert.Root>{/if}
     <form class="rename-form" onsubmit={(event) => { event.preventDefault(); void rename(); }}><Field.FieldGroup><Field.Field><Field.FieldLabel for="session-title">Title</Field.FieldLabel><Input id="session-title" name="session-title" bind:value={title} required /></Field.Field></Field.FieldGroup><Button type="submit" disabled={Boolean(pending)}>Save title</Button></form>
-    <Dialog.Footer><Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{session?.archived ? 'Restore session' : 'Archive session'}</Button><Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>Delete permanently</Button></Dialog.Footer>
+    <Dialog.Footer>{#if archiveAvailable}<Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{session?.archived ? 'Restore session' : 'Archive session'}</Button>{/if}<Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>Delete permanently</Button></Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 

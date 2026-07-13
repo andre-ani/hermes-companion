@@ -112,6 +112,7 @@ export function normalizeHermesSession(value: unknown): HermesSession {
 }
 
 export class HermesClient {
+  private sessionManagementAvailable = false;
   readonly connection;
 
   constructor(connection: GatewayConnection, private readonly token = '', private readonly controlToken = '') {
@@ -180,6 +181,17 @@ export class HermesClient {
       : this.request<T>(path, init, timeoutMs);
   }
 
+  async supportsSessionManagement() {
+    if (this.sessionManagementAvailable) return true;
+    const available = await this.endpointAvailable(
+      '/api/profiles/sessions?limit=1&profile=all&archived=exclude&order=recent',
+      'GET',
+      Boolean(this.connection.controlUrl)
+    );
+    if (available) this.sessionManagementAvailable = true;
+    return available;
+  }
+
   private async endpointAvailable(path: string, method = 'GET', control = false): Promise<boolean> {
     try {
       if (control && !this.connection.controlUrl) return false;
@@ -216,9 +228,10 @@ export class HermesClient {
     const advertised = await this.capabilities();
     const feature = (name: string) => advertised?.features[name] === true;
     const endpoint = (name: string) => Boolean(advertised?.endpoints[name]?.path);
-    const [healthFallback, modelsFallback, modelOptions, profiles, memory, controlSkills, config, jobsFallback, mcp, analytics, operations, logs, credentials, toolsets, permissions, messaging, webhooks, learning, curator, updates, plugins, kanban, achievements, checkpoints] = await Promise.all([
+    const [healthFallback, modelsFallback, sessionManagement, modelOptions, profiles, memory, controlSkills, config, jobsFallback, mcp, analytics, operations, logs, credentials, toolsets, permissions, messaging, webhooks, learning, curator, updates, plugins, kanban, achievements, checkpoints] = await Promise.all([
       advertised ? false : this.endpointAvailable('/health'),
       advertised ? false : this.endpointAvailable('/v1/models'),
+      this.supportsSessionManagement(),
       this.endpointAvailable('/api/model/options?explicit_only=1', 'GET', true),
       this.endpointAvailable('/api/profiles', 'GET', true),
       this.endpointAvailable('/api/memory', 'GET', true),
@@ -257,7 +270,7 @@ export class HermesClient {
       status: connected && anyEnhanced && sessions ? 'enhanced' : connected && !anyEnhanced ? 'connected' : anyEnhanced ? 'partial' : 'disconnected',
       latencyMs: connected || anyEnhanced ? Math.round(performance.now() - started) : null,
       core: { health, chatCompletions, models, streaming: chatCompletions || enhancedChat },
-      enhanced: { sessions, enhancedChat, profiles, memory, skills, config, jobs, approvals, mcp, analytics, operations, logs, credentials, toolsets, permissions, messaging, webhooks, learning, curator, updates, plugins, kanban, achievements, checkpoints },
+      enhanced: { sessions, sessionManagement, enhancedChat, profiles, memory, skills, config, jobs, approvals, mcp, analytics, operations, logs, credentials, toolsets, permissions, messaging, webhooks, learning, curator, updates, plugins, kanban, achievements, checkpoints },
       compatibility: advertised
         ? { mode: 'verified', contract: HERMES_API_CAPABILITY_CONTRACT_V1, compatible: advertised.platform === undefined || advertised.platform === 'hermes-agent', reason: advertised.platform && advertised.platform !== 'hermes-agent' ? `Unsupported capability platform: ${advertised.platform}` : `Verified from ${HERMES_API_CAPABILITY_CONTRACT_V1}.` }
         : connected
@@ -292,20 +305,28 @@ export class HermesClient {
     return this.normalizeSession(response.session);
   }
 
-  async updateSession(sessionId: string, title: string, profileId?: string): Promise<HermesSession> {
-    const profileQuery = profileId ? `?profile=${encodeURIComponent(profileId)}` : '';
-    await this.requestSessionResource<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+  async updateSession(sessionId: string, title: string, profileId?: string): Promise<void> {
+    const profileQuery = profileId && !this.connection.controlUrl ? `?profile=${encodeURIComponent(profileId)}` : '';
+    await this.requestSessionResource<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}${profileQuery}`, {
       method: 'PATCH', body: JSON.stringify({ title, ...(profileId ? { profile: profileId } : {}) })
     });
-    return this.getSession(sessionId, profileId);
   }
 
   async deleteSession(sessionId: string, profileId?: string): Promise<void> {
     const profileQuery = profileId ? `?profile=${encodeURIComponent(profileId)}` : '';
-    await this.requestSessionResource(`/api/sessions/${encodeURIComponent(sessionId)}${profileQuery}`, { method: 'DELETE' });
+    try {
+      await this.requestSessionResource(`/api/sessions/${encodeURIComponent(sessionId)}${profileQuery}`, { method: 'DELETE' });
+    } catch (cause) {
+      // Delete is an idempotent desired-state transition. A stale directory
+      // entry that is already absent upstream must remain removable locally.
+      if (!(cause instanceof HermesApiError) || cause.status !== 404 || !(await this.supportsSessionManagement())) throw cause;
+    }
   }
 
   async setSessionArchived(sessionId: string, archived: boolean, profileId?: string): Promise<void> {
+    if (!(await this.supportsSessionManagement())) {
+      throw new Error('Archive requires the Hermes session-management service for this connection.');
+    }
     await this.requestSessionResource(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH', body: JSON.stringify({ archived, ...(profileId ? { profile: profileId } : {}) })
     });

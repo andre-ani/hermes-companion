@@ -39,7 +39,7 @@
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import { setBrowserFullscreen } from '$lib/client/remote/browser.remote';
   import { getDesktopSettings, getOpenRouterPolicy } from '$lib/client/remote/settings.remote';
-  import { adoptWorkspaceLayout, deleteWorkspaceLayout, getWorkspaceLayout, setWorkspaceLayout } from '$lib/client/remote/workspace-layout.remote';
+  import { adoptWorkspaceLayout, getWorkspaceLayout, setWorkspaceLayout } from '$lib/client/remote/workspace-layout.remote';
   import { clearWorkspaceLayoutJournal, readWorkspaceLayoutJournal, writeWorkspaceLayoutJournal } from '$lib/client/workspace-layout-journal';
   import { settingsSections } from '$lib/settings/settings-registry';
   import { modelSelectionKey } from '$lib/model-identity';
@@ -111,7 +111,6 @@
   const pendingWorkspaceLayouts = new Map<string, { owner: WorkspaceLayoutOwner; preferences: WorkspaceLayoutPreferences }>();
   const workspaceLayoutSaveQueues = new Map<string, Promise<void>>();
   const workspaceLayoutOwnerRedirects = new Map<string, WorkspaceLayoutOwner>();
-  const deletedWorkspaceLayoutKeys = new Set<string>();
   let workspaceLayoutResizeActive = $state(false);
   let workspaceTargetHydratedKey = $state('');
   let resolvedWorkspaceTarget = $state<{ key: string; worktree: WorktreeRecord | null; reason: string | null } | null>(null);
@@ -232,6 +231,7 @@
     : null);
 
   const composerAvailable = $derived(Boolean(overview?.gateway.connection.serveUrl || overview?.gateway.connection.serveWsUrl));
+  const sessionManagementAvailable = $derived(overview?.gateway.enhanced.sessionManagement === true);
   const gatewayTone = $derived(overview?.gateway.status === 'enhanced' || overview?.gateway.status === 'connected' ? 'positive' : overview?.gateway.status === 'partial' ? 'warning' : 'negative');
   const approvalMode = $derived(overview?.approvalMode ?? null);
   const profileControlLocations = $derived(profileUiPreferences?.contextualControls ?? { approval: 'status' as const, context: 'status' as const });
@@ -471,7 +471,6 @@
     const sourceKey = workspaceLayoutOwnerKey(owner);
     const targetOwner = workspaceLayoutOwnerRedirects.get(sourceKey) ?? owner;
     const targetKey = workspaceLayoutOwnerKey(targetOwner);
-    if (deletedWorkspaceLayoutKeys.has(targetKey)) return;
     if (workspaceLayoutHydratedKey !== sourceKey && workspaceLayoutHydratedKey !== targetKey) return;
     const parsed = writeWorkspaceLayoutJournal(targetOwner, preferences);
     pendingWorkspaceLayouts.set(targetKey, { owner: targetOwner, preferences: parsed });
@@ -492,7 +491,6 @@
   }
 
   function assertWorkspaceLayoutWritable(key: string) {
-    if (deletedWorkspaceLayoutKeys.has(key)) throw new Error('The destination workspace layout was deleted.');
   }
 
   function writePersistedWorkspaceLayout(owner: WorkspaceLayoutOwner, preferences: WorkspaceLayoutPreferences) {
@@ -524,7 +522,6 @@
   async function adoptPersistedWorkspaceLayout(from: WorkspaceLayoutOwner, to: WorkspaceLayoutOwner, preferences: WorkspaceLayoutPreferences) {
     const fromKey = workspaceLayoutOwnerKey(from);
     const toKey = workspaceLayoutOwnerKey(to);
-    if (deletedWorkspaceLayoutKeys.has(toKey)) throw new Error('The destination workspace layout was deleted.');
     workspaceLayoutOwnerRedirects.set(fromKey, to);
     writeWorkspaceLayoutJournal(to, preferences);
     pendingWorkspaceLayouts.delete(fromKey);
@@ -536,20 +533,6 @@
     clearWorkspaceLayoutJournal(from);
     clearWorkspaceLayoutJournal(to, preferences);
     if (workspaceLayoutHydratedKey === fromKey) workspaceLayoutHydratedKey = toKey;
-  }
-
-  async function deletePersistedWorkspaceLayout(owner: WorkspaceLayoutOwner) {
-    const key = workspaceLayoutOwnerKey(owner);
-    deletedWorkspaceLayoutKeys.add(key);
-    for (const [sourceKey, target] of workspaceLayoutOwnerRedirects) {
-      if (sourceKey === key || workspaceLayoutOwnerKey(target) === key) workspaceLayoutOwnerRedirects.delete(sourceKey);
-    }
-    pendingWorkspaceLayouts.delete(key);
-    clearWorkspaceLayoutJournal(owner);
-    await (workspaceLayoutSaveQueues.get(key) ?? Promise.resolve());
-    await enqueueWorkspaceLayoutOperation(key, async () => {
-      await resolveRemoteResult(deleteWorkspaceLayout({ owner }));
-    });
   }
 
   async function hydrateWorkspaceLayout(owner: WorkspaceLayoutOwner) {
@@ -1521,11 +1504,6 @@
   }
 
   async function handleSessionDeleted(sessionId: string) {
-    const deletedSession = overview?.sessions.find((session) => session.id === sessionId);
-    const connectionId = overview?.gateway.connection.id;
-    const deletedLayoutOwner = connectionId && deletedSession?.profileId
-      ? { connectionId, profileId: deletedSession.profileId, resource: { kind: 'session' as const, id: sessionId } }
-      : null;
     if (overview) {
       overview = {
         ...overview,
@@ -1540,7 +1518,6 @@
       sessionHistoryError = null;
       contextUsage = null;
     }
-    if (deletedLayoutOwner) await deletePersistedWorkspaceLayout(deletedLayoutOwner).catch(() => undefined);
     announcement = 'Session deleted';
     await loadWorkspace(true, true);
   }
@@ -1610,7 +1587,7 @@
     <SessionNavigation
       sessions={overview?.sessions ?? []} projects={overview?.projects ?? []} projectTree={overview?.projectTree.projects ?? []} {hydratedProjects} {projectLoadingIds} worktrees={overview?.worktrees ?? []} connections={overview?.connections ?? []}
       pinnedSessionIds={overview?.pinnedSessionIds ?? []} {activeSessionId} {selectedProjectId} activeProfileId={overview?.activeProfileId ?? 'default'} presentation={sessionPresentation}
-      filter={profileUiPreferences?.sessionFilter ?? null} loading={workspaceStarting}
+      filter={profileUiPreferences?.sessionFilter ?? null} loading={workspaceStarting} archiveAvailable={sessionManagementAvailable}
       onselectsession={(id, projectId) => projectId ? void selectProjectThread(projectId, id) : void selectSession(id)}
       onselectproject={(id) => { selectedProjectId = id; newSession(true); }} onnewproject={() => (projectsOpen = true)}
       onprojectexpand={(id) => void hydrateProject(id)}
@@ -1689,7 +1666,7 @@
                     {#if message.role === 'user' && message.text.trim()}<Button class="message-restore" size="icon-xs" variant="ghost" disabled={sending} aria-label="Restore checkpoint from this prompt" title="Restore checkpoint — rerun from this prompt" onclick={() => requestCheckpointRestore(messageIndex)}><RotateCcw /></Button>{/if}
                   </Message.Root>
                 {/each}
-              {:else if activeSessionId}<Conversation.EmptyState title="" description=""><div class="session-empty-state">{#if sessionHistoryError}<CircleAlert /><h1>History unavailable</h1><p>{sessionHistoryError}</p><div><Button size="sm" variant="outline" onclick={() => void selectSession(activeSessionId!)}>Retry</Button><Button size="sm" variant="ghost" onclick={() => newSession()}>New chat</Button></div>{:else}<h1>No messages yet</h1><p>Send a message to begin this session.</p>{/if}</div></Conversation.EmptyState>
+              {:else if activeSessionId}<Conversation.EmptyState title="" description=""><div class="session-empty-state">{#if sessionHistoryError}<CircleAlert /><h1>History unavailable</h1><p>{sessionHistoryError}</p><div><Button size="sm" variant="outline" onclick={() => void selectSession(activeSessionId!)}>Retry</Button><Button size="sm" variant="ghost" onclick={() => { sessionActionTargetId = activeSessionId; sessionActionsOpen = true; }}>Manage session</Button><Button size="sm" variant="ghost" onclick={() => newSession()}>New chat</Button></div>{:else}<h1>No messages yet</h1><p>Send a message to begin this session.</p>{/if}</div></Conversation.EmptyState>
               {:else}<Conversation.EmptyState title="Start with Hermes" description=""><div class="welcome-state"><div class="welcome-mark"><Sparkles /></div><h1>Ask Hermes anything</h1><p>{composerAvailable ? 'Start a conversation, plan work, or continue an existing session.' : 'Connect Hermes or configure OpenRouter to begin.'}</p>
                 <div class="new-session-composer"><ChatComposer
                   id="new-session-composer" placement="new-session" bind:prompt busy={sending}
@@ -1757,7 +1734,7 @@
 <ProjectActionsDialog bind:open={projectActionsOpen} project={overview?.projects.find((project) => project.id === projectActionTargetId) ?? null} onchanged={() => loadWorkspace(true)} ondeleted={(projectId) => void handleProjectDeleted(projectId)} />
 <WorktreeDialog bind:open={worktreeOpen} project={overview?.projects.find((project) => project.id === worktreeProjectTargetId) ?? null} repositoryPaths={worktreeRepositoryPaths} oncreated={startWorktreeThread} />
 <WorktreeRemoveDialog bind:open={worktreeRemoveOpen} target={worktreeRemoveTarget} onremoved={(path) => void handleWorktreeRemoved(path)} />
-<SessionActionsDialog bind:open={sessionActionsOpen} session={overview?.sessions.find((session) => session.id === sessionActionTargetId) ?? activeSession} onchanged={() => loadWorkspace(true)} ondeleted={(sessionId) => void handleSessionDeleted(sessionId)} />
+<SessionActionsDialog bind:open={sessionActionsOpen} session={overview?.sessions.find((session) => session.id === sessionActionTargetId) ?? activeSession} archiveAvailable={sessionManagementAvailable} onchanged={() => loadWorkspace(true)} ondeleted={(sessionId) => void handleSessionDeleted(sessionId)} />
 <CommandMenu.Dialog bind:open={commandOpen} onOpenChange={(nextOpen) => { if (!nextOpen) resetCommandPaletteSearch(); }} filter={commandPaletteFilter} class="companion-command-palette" title="Hermes Companion commands" description="Run actions, reopen recent work, jump directly to settings, or send a prompt.">
   <CommandMenu.Input bind:value={commandQuery} placeholder="Search, navigate, or ask Hermes…" />
   <CommandMenu.List>
