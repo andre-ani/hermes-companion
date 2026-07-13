@@ -338,7 +338,7 @@ actions. Before each operation it resolves the selected project through
 authoritative `projects.project_sessions` tree. The main checkout is never a
 valid removal target.
 
-A disposable Railway project `p_9ef00c9a` proved the complete visible path.
+A disposable Railway project proved the complete visible path.
 The project-row context menu opened **New worktree…**, Hermes created
 `hermes/native-tree-uat` at
 `/opt/data/workspaces/companion-worktree-uat/.worktrees/native-tree-uat`, and

@@ -65,11 +65,9 @@ npm run build
 
 ## Project notes
 
-- [Active release goal](docs/active-goal.md)
 - [Architecture](docs/architecture.md)
 - [Design system](docs/design-system.md)
 - [Profile-led shell contract](docs/profile-led-shell-contract.md)
-- [Pinned upstream audit](docs/upstream-audit.md)
 
 Research documents describe inspected upstream behavior and design references;
 they are not claims that every described feature is complete.
