@@ -21,6 +21,14 @@ Runtime surfaces:
 - private port `8642`: authenticated upstream gateway API;
 - `/opt/data`: the single persistent Hermes home for profiles, credentials,
   sessions, cron jobs, skills, plugins, MCP configuration, and gateway state.
+- `/opt/data/hermes-companion`: persistent execution-bridge state for real
+  project/worktree bindings and preview leases.
+
+At container initialization, `025-hermes-companion-state` repairs ownership
+and restrictive permissions on the Companion state directory before the
+upstream Hermes wrapper drops to the `hermes` user. This is an in-place,
+non-destructive migration for volumes created by older root-running bridge
+deployments; it never replaces or deletes `bridge-state.json`.
 
 Companion intentionally does not expose session forking in this release. The
 upstream fork route exists only on the private gateway API, not on the public

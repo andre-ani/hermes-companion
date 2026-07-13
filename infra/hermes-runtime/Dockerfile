@@ -17,7 +17,8 @@ COPY --from=bridge-build /app/apps/bridge/dist /opt/hermes-companion/apps/bridge
 COPY --from=bridge-build /app/apps/bridge/package.json /opt/hermes-companion/apps/bridge/package.json
 COPY --from=bridge-build /app/packages/contracts /opt/hermes-companion/packages/contracts
 COPY infra/hermes-runtime/start.sh /opt/hermes-companion/start.sh
-RUN chmod 0755 /opt/hermes-companion/start.sh && mkdir -p /opt/data/hermes-companion
+COPY infra/hermes-runtime/companion-state-init.sh /etc/cont-init.d/025-hermes-companion-state
+RUN chmod 0755 /opt/hermes-companion/start.sh /etc/cont-init.d/025-hermes-companion-state
 ENV NODE_ENV=production BRIDGE_HOST=0.0.0.0 BRIDGE_STATE_DIR=/opt/data/hermes-companion BRIDGE_ALLOWED_ROOTS=/opt/data,/workspace,/app HERMES_UPSTREAM=http://127.0.0.1:8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD /usr/local/bin/node -e "fetch('http://127.0.0.1:'+(process.env.PORT||9130)+'/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["/opt/hermes-companion/start.sh"]
