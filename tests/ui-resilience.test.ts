@@ -289,7 +289,7 @@ describe('shell resilience', () => {
     expect(navigation).toContain("session.unread ? 'Mark as Read' : 'Mark as Unread'");
     expect(navigation).toContain('onarchive?.(session.id)');
     expect(page).toContain('async function toggleSessionArchived(sessionId: string)');
-    expect(page).toContain('if (session?.unread) await setSessionReadState(sessionId, false, false);');
+    expect(page).toContain('if (session?.unread) await setSessionReadState(sessionId, false, false, owner);');
     expect(navigation).not.toContain('Fork Chat');
     expect(navigation).not.toContain('onfork');
   });

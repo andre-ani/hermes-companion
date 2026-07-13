@@ -43,6 +43,7 @@
   import { modelSelectionKey } from '$lib/model-identity';
   import { applyOpenRouterPolicy } from '$lib/openrouter-policy';
   import { errorMessage } from '$lib/error-message';
+  import { SerializedSelectionQueue, ViewOwnership, viewResourceKey, type ViewOwner } from '$lib/view-ownership';
   import type { CapabilityAvailability, CapabilityFamily, ChatAttachmentInput, ChatTurnApproval, ChatTurnSnapshot, ContextUsage, DesktopPreferences, GatewayStatus, HermesGitWorktree, HermesMessage, HermesProfile, HermesProjectTree, HermesProjectTreeNode, HermesSession, ModelInfo, OpenRouterPolicyOverview, ProfileUiPreferences, ProjectBinding, SessionPresentation, SessionTreeFilter, WorktreeRecord } from '@hermes-companion/contracts';
   import { ArrowLeft, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Command as CommandIcon, FolderGit2, GitCommitHorizontal, GitPullRequest, KeyRound, Maximize2, MessageCircle, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RotateCcw, RotateCw, Search, Server, Settings, Shapes, ShieldCheck, Sparkles, SquarePen, SquareTerminal, Stethoscope, Timer, Upload, Wifi, Wrench } from '@lucide/svelte';
 
@@ -122,10 +123,24 @@
   let openRouterVerified = $state(false);
   let openRouterVerificationError = $state<string | null>(null);
   let openRouterPolicy = $state<OpenRouterPolicyOverview | null>(null);
+  type TurnOwner = { requestId: string; connectionId: string | null; profileId: string | null; sessionId: string | null; draftId: string | null };
+  type RendererTurnState = { owner: TurnOwner; approval: (ChatTurnApproval & { requestId: string }) | null; approvalPending: boolean };
+  let activeTurns = $state<Record<string, RendererTurnState>>({});
+  const viewOwnership = new ViewOwnership();
+  let workspaceLoadGeneration = 0;
+  let profileSelectionTargetId: string | null = null;
+  const profileSelections = new SerializedSelectionQueue<string>();
+  let profileUiLoadGeneration = 0;
+  let profileUiSaveGeneration = 0;
 
   const activeProject = $derived(overview?.projects.find((project) => project.id === selectedProjectId) ?? null);
   const workspaceStarting = $derived(loading && overview === null);
-  const activeSession = $derived(overview?.sessions.find((session) => session.id === activeSessionId) ?? null);
+  const activeSession = $derived.by(() => {
+    const current = overview;
+    if (!current) return null;
+    return current.sessions.find((session) => session.id === activeSessionId
+      && (session.profileId ?? current.activeProfileId) === current.activeProfileId) ?? null;
+  });
   const activeWorktree = $derived(overview?.worktrees.find((worktree) => worktree.threadId === activeSessionId && worktree.projectId === activeProject?.id) ?? null);
   // A session remains a conversation even when it is attached to a worktree.
   // Project ownership enriches the composer; it does not silently replace the
@@ -275,24 +290,126 @@
 
   function capabilityFor(family: CapabilityFamily) { return overview?.capabilities.find((item) => item.family === family) ?? null; }
 
+  function beginVisibleView(
+    sessionId: string | null,
+    location: 'chat' | 'settings' | 'surface' = 'chat',
+    profileId = profileSelectionTargetId ?? overview?.activeProfileId ?? null,
+    connectionId = overview?.gateway.connection.id ?? null,
+    draftId = sessionId === null ? viewOwnership.current?.draftId ?? crypto.randomUUID() : null
+  ) {
+    const owner = viewOwnership.begin({ connectionId, profileId, sessionId, draftId, location });
+    activeSessionId = sessionId;
+    projectVisibleTurn(owner);
+    return owner;
+  }
+
+  function ownsVisibleView(owner: ViewOwner | null | undefined) {
+    return viewOwnership.owns(owner) && activeSessionId === owner.sessionId;
+  }
+
+  function ensureChatOwner() {
+    const current = viewOwnership.current;
+    if (current?.location === 'chat' && current.sessionId === activeSessionId) return current;
+    return viewOwnership.begin({
+      connectionId: overview?.gateway.connection.id ?? null,
+      profileId: activeSession?.profileId ?? profileSelectionTargetId ?? overview?.activeProfileId ?? null,
+      sessionId: activeSessionId,
+      draftId: activeSessionId === null ? current?.draftId ?? crypto.randomUUID() : null,
+      location: 'chat'
+    });
+  }
+
+  function turnKey(owner: Pick<TurnOwner, 'connectionId' | 'profileId' | 'sessionId' | 'draftId'>) {
+    return viewResourceKey(owner);
+  }
+
+  function visibleTurn(owner = viewOwnership.current) {
+    if (!owner || owner.location !== 'chat') return null;
+    return activeTurns[turnKey(owner)] ?? null;
+  }
+
+  function projectVisibleTurn(owner = viewOwnership.current) {
+    const turn = visibleTurn(owner);
+    sending = Boolean(turn);
+    activeTurnRequestId = turn?.owner.requestId ?? null;
+    activeTurnApproval = turn?.approval ?? null;
+    approvalResponsePending = turn?.approvalPending ?? false;
+  }
+
+  function isTurnVisible(owner: TurnOwner) {
+    const view = viewOwnership.current;
+    return Boolean(view && view.location === 'chat'
+      && view.connectionId === owner.connectionId
+      && view.profileId === owner.profileId
+      && view.sessionId === owner.sessionId
+      && view.draftId === owner.draftId
+      && activeSessionId === owner.sessionId);
+  }
+
+  function registerTurn(owner: TurnOwner) {
+    activeTurns = { ...activeTurns, [turnKey(owner)]: { owner, approval: null, approvalPending: false } };
+    if (isTurnVisible(owner)) projectVisibleTurn();
+  }
+
+  function adoptTurnSession(owner: TurnOwner, sessionId: string) {
+    const previousKey = turnKey(owner);
+    const state = activeTurns[previousKey];
+    const adopted = { ...owner, sessionId, draftId: null };
+    const next = { ...activeTurns };
+    delete next[previousKey];
+    next[turnKey(adopted)] = { ...(state ?? { approval: null, approvalPending: false }), owner: adopted };
+    activeTurns = next;
+    projectVisibleTurn();
+    return adopted;
+  }
+
+  function updateTurnState(owner: TurnOwner, change: Partial<Omit<RendererTurnState, 'owner'>>) {
+    const key = turnKey(owner);
+    const current = activeTurns[key];
+    if (!current || current.owner.requestId !== owner.requestId) return;
+    activeTurns = { ...activeTurns, [key]: { ...current, ...change } };
+    if (isTurnVisible(owner)) projectVisibleTurn();
+  }
+
+  function releaseTurn(owner: TurnOwner) {
+    const key = turnKey(owner);
+    if (activeTurns[key]?.owner.requestId !== owner.requestId) return;
+    const next = { ...activeTurns };
+    delete next[key];
+    activeTurns = next;
+    projectVisibleTurn();
+  }
+
+  function mergeHistoryWithVisibleMessages(history: HermesMessage[]) {
+    const visibleById = new Map(messages.map((message) => [message.id, message]));
+    const merged = history.map((message) => visibleById.get(message.id) ?? message);
+    const historyIds = new Set(history.map((message) => message.id));
+    return [...merged, ...messages.filter((message) => !historyIds.has(message.id))];
+  }
+
   async function hydrateProject(projectId: string) {
     if (hydratedProjects[projectId] || projectLoadingIds.includes(projectId)) return;
+    const ownerKey = hydratedProjectOwnerKey;
     projectLoadingIds = [...projectLoadingIds, projectId];
     try {
       const project = await resolveRemoteResult(getProjectSessions({ projectId }));
-      if (project) hydratedProjects = { ...hydratedProjects, [projectId]: project };
+      if (project && hydratedProjectOwnerKey === ownerKey) hydratedProjects = { ...hydratedProjects, [projectId]: project };
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Hermes project sessions could not be loaded.';
+      if (hydratedProjectOwnerKey === ownerKey) error = cause instanceof Error ? cause.message : 'Hermes project sessions could not be loaded.';
     } finally {
-      projectLoadingIds = projectLoadingIds.filter((id) => id !== projectId);
+      if (hydratedProjectOwnerKey === ownerKey) projectLoadingIds = projectLoadingIds.filter((id) => id !== projectId);
     }
   }
 
-  async function loadWorkspace(refresh = false) {
-    loading = true; error = '';
+  async function loadWorkspace(refresh = false, selectInitial = false, silent = false) {
+    if (silent && (loading || profileSelectionTargetId !== null)) return false;
+    const generation = ++workspaceLoadGeneration;
+    const startingOwner = viewOwnership.current;
+    if (!silent) { loading = true; error = ''; }
     try {
       if (refresh) await workspaceOverviewQuery.refresh();
       const nextOverview = await resolveRemoteResult(workspaceOverviewQuery) as Overview;
+      if (generation !== workspaceLoadGeneration) return false;
       const nextOwnerKey = `${nextOverview.gateway.connection.id}:${nextOverview.activeProfileId}`;
       if (nextOwnerKey !== hydratedProjectOwnerKey) {
         hydratedProjects = {};
@@ -300,7 +417,19 @@
         hydratedProjectOwnerKey = nextOwnerKey;
       }
       overview = nextOverview;
-      if (!activeSessionId) {
+      const currentOwner = viewOwnership.current;
+      if (profileSelectionTargetId === null && currentOwner && (currentOwner.connectionId !== nextOverview.gateway.connection.id || currentOwner.profileId !== nextOverview.activeProfileId)) {
+        beginVisibleView(null, 'chat', nextOverview.activeProfileId, nextOverview.gateway.connection.id);
+        messages = [];
+        sessionHistoryError = null;
+        contextUsage = null;
+        contextUsageReason = null;
+        activeModelKey = null;
+        selectedProjectId = null;
+        draftWorktree = null;
+      }
+      const viewIntentUnchanged = startingOwner ? viewOwnership.owns(startingOwner) : viewOwnership.current === null;
+      if (selectInitial && !activeSessionId && viewIntentUnchanged) {
         const profileId = overview.activeProfileId;
         // Global navigation may list sessions from every profile, but the
         // center pane belongs to the active profile. Never borrow the first
@@ -308,46 +437,69 @@
         const initial = overview.sessions.find((session) => session.source === 'chat' && (session.profileId ?? 'default') === profileId);
         if (initial) await selectSession(initial.id);
       }
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'The workspace could not be loaded.'; }
-    finally { loading = false; }
+      return true;
+    } catch (cause) {
+      if (!silent && generation === workspaceLoadGeneration) error = cause instanceof Error ? cause.message : 'The workspace could not be loaded.';
+      return false;
+    }
+    finally { if (!silent && generation === workspaceLoadGeneration) loading = false; }
   }
 
   async function selectSession(sessionId: string) {
     if (sessionId !== activeSessionId) draftWorktree = null;
     const session = overview?.sessions.find((item) => item.id === sessionId);
+    const sessionProfileId = session?.profileId ?? overview?.activeProfileId ?? null;
+    const intendedProfileId = profileSelectionTargetId ?? overview?.activeProfileId ?? null;
+    if (session && sessionProfileId && sessionProfileId !== intendedProfileId) {
+      await selectProfile(sessionProfileId, sessionId);
+      return;
+    }
     const boundWorktree = overview?.worktrees.find((item) => item.threadId === sessionId);
     if (session?.projectId) selectedProjectId = session.projectId;
     else if (boundWorktree) selectedProjectId = boundWorktree.projectId;
-    activeSurface = null; activeSessionId = sessionId; error = ''; sessionHistoryError = null; messages = []; activeTurnApproval = null;
+    const owner = beginVisibleView(sessionId, 'chat');
+    activeSurface = null; settingsActive = false; error = ''; sessionHistoryError = null; messages = [];
     activeModelKey = session?.model ? modelSelectionKey('hermes', session.model, session.provider) : null;
-    if (session?.unread) await setSessionReadState(sessionId, false, false);
-    try { messages = await resolveRemoteResult(getSessionMessages({ sessionId, profileId: session?.profileId ?? undefined })) as HermesMessage[]; void loadContextUsage(sessionId); }
-    catch (cause) { messages = []; sessionHistoryError = cause instanceof Error ? cause.message : 'Session history could not be loaded.'; }
+    if (session?.unread) await setSessionReadState(sessionId, false, false, owner);
+    try {
+      const history = await resolveRemoteResult(getSessionMessages({ sessionId, profileId: session?.profileId ?? undefined })) as HermesMessage[];
+      if (!ownsVisibleView(owner)) return;
+      messages = mergeHistoryWithVisibleMessages(history);
+      void loadContextUsage(sessionId, owner);
+    }
+    catch (cause) {
+      if (!ownsVisibleView(owner)) return;
+      sessionHistoryError = cause instanceof Error ? cause.message : 'Session history could not be loaded.';
+    }
   }
 
-  async function loadContextUsage(sessionId: string) {
+  async function loadContextUsage(sessionId: string, owner = viewOwnership.current) {
+    if (!ownsVisibleView(owner)) return;
     contextUsage = null; contextUsageReason = 'Loading Hermes context usage…';
     try {
       const result = await resolveRemoteResult(getSessionContextUsage({ sessionId }));
-      if (activeSessionId !== sessionId) return;
+      if (!ownsVisibleView(owner)) return;
       contextUsage = result.available ? result.data : null;
       contextUsageReason = result.reason;
     } catch (cause) {
-      if (activeSessionId !== sessionId) return;
+      if (!ownsVisibleView(owner)) return;
       contextUsage = null; contextUsageReason = cause instanceof Error ? cause.message : 'Hermes context usage is unavailable for this session.';
     }
   }
 
 
   function newSession(preserveProject = false) {
-    activeModelKey = null; activeSurface = null; settingsActive = false; activeSessionId = null; messages = []; activeTurnApproval = null; contextUsage = null; contextUsageReason = null; error = ''; sessionHistoryError = null;
+    beginVisibleView(null, 'chat', overview?.activeProfileId ?? null, overview?.gateway.connection.id ?? null, crypto.randomUUID());
+    activeModelKey = null; activeSurface = null; settingsActive = false; messages = []; contextUsage = null; contextUsageReason = null; error = ''; sessionHistoryError = null;
     draftWorktree = null;
     if (!preserveProject) selectedProjectId = null;
     announcement = overview?.gateway.enhanced.sessions ? 'New Hermes conversation ready' : 'Started a temporary local thread';
   }
 
   async function startProjectThread(project: ProjectBinding) {
-    await loadWorkspace(true);
+    const owner = viewOwnership.current;
+    const loaded = await loadWorkspace(true);
+    if (!loaded || (owner ? !viewOwnership.owns(owner) : viewOwnership.current !== null)) return;
     selectedProjectId = project.id;
     newSession(true);
   }
@@ -399,6 +551,7 @@
   async function submit(message = prompt, restore?: { messageIndex: number; userOrdinal: number }, attachments: ChatAttachmentInput[] = []) {
     const text = message.trim(); if ((!text && !attachments.length) || sending) return false;
     let accepted = false;
+    let viewOwner = ensureChatOwner();
     sending = true; prompt = ''; error = '';
     const originalMessages = messages;
     const requestId = crypto.randomUUID();
@@ -408,7 +561,8 @@
       ? { projectId: activeProject.id, repositoryPath: activeProject.repositoryPath, worktreePath: draftWorktree.path, branch: draftWorktree.branch }
       : null;
     const provisionalSessionId = originalSessionId ?? `local-${requestId}`;
-    activeTurnRequestId = requestId;
+    let turnOwner: TurnOwner = { requestId, connectionId: viewOwner.connectionId, profileId: viewOwner.profileId, sessionId: originalSessionId, draftId: viewOwner.draftId };
+    registerTurn(turnOwner);
     messages = [...(restore ? messages.slice(0, restore.messageIndex) : messages), { id: optimisticUserId, sessionId: provisionalSessionId, role: 'user', text, createdAt: new Date().toISOString(), reasoning: null, thinkingStatus: null, toolCalls: [], attachments: attachments.map((attachment) => ({ type: 'file' as const, filename: attachment.filename, mediaType: attachment.mediaType, url: attachment.mediaType.startsWith('image/') ? attachment.dataUrl : undefined })), checkpoints: [], inference: null, generation: null }];
     try {
       const result = await resolveRemoteResult(sendChatMessage({
@@ -422,11 +576,24 @@
       accepted = true;
       let snapshot = result.snapshot as ChatTurnSnapshot;
       if (!originalSessionId) {
-        activeSessionId = snapshot.sessionId;
+        const currentView = viewOwnership.current;
+        const adoptedViewOwner = currentView
+          && currentView.connectionId === turnOwner.connectionId
+          && currentView.profileId === turnOwner.profileId
+          && currentView.sessionId === null
+          && currentView.draftId === turnOwner.draftId
+          ? viewOwnership.adoptSession(currentView, snapshot.sessionId)
+          : null;
+        turnOwner = adoptTurnSession(turnOwner, snapshot.sessionId);
+        if (adoptedViewOwner) {
+          viewOwner = adoptedViewOwner;
+          activeSessionId = snapshot.sessionId;
+          projectVisibleTurn(viewOwner);
+        }
         if (pendingWorktreeBinding) {
           try {
             const boundWorktree = await bindCreatedWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId });
-            if (overview) {
+            if (overview && isTurnVisible(turnOwner)) {
               overview = {
                 ...overview,
                 worktrees: [
@@ -437,26 +604,36 @@
             }
             await refreshWorkspaceOverview();
           } catch (cause) {
-            error = errorMessage(cause, 'The Hermes session could not be bound to its worktree.');
+            if (isTurnVisible(turnOwner)) error = errorMessage(cause, 'The Hermes session could not be bound to its worktree.');
           }
         }
       }
-      messages = messages.map((candidate) => candidate.id === optimisticUserId ? { ...candidate, sessionId: snapshot.sessionId } : candidate);
-      applyTurnSnapshot(snapshot);
+      if (isTurnVisible(turnOwner)) messages = messages.map((candidate) => candidate.id === optimisticUserId ? { ...candidate, sessionId: snapshot.sessionId } : candidate);
+      applyTurnSnapshot(snapshot, turnOwner);
       while (snapshot.status === 'streaming') {
         const next = await resolveRemoteResult(sendChatMessage({ operation: 'next', requestId, afterSequence: snapshot.sequence }));
         if (!next.ok) throw new Error(next.error);
         if (!('snapshot' in next)) throw new Error('Hermes stopped reporting response progress.');
         snapshot = next.snapshot as ChatTurnSnapshot;
-        applyTurnSnapshot(snapshot);
+        applyTurnSnapshot(snapshot, turnOwner);
       }
-      if (snapshot.status === 'failed') error = snapshot.error ?? 'The response did not finish.';
-      else if (snapshot.status === 'cancelled' || snapshot.status === 'interrupted') announcement = 'Response stopped';
-      else announcement = 'Hermes replied';
-      if (snapshot.status === 'completed' && snapshot.sessionId === activeSessionId) void loadContextUsage(snapshot.sessionId);
+      if (isTurnVisible(turnOwner)) {
+        if (snapshot.status === 'failed') error = snapshot.error ?? 'The response did not finish.';
+        else if (snapshot.status === 'cancelled' || snapshot.status === 'interrupted') announcement = 'Response stopped';
+        else announcement = 'Hermes replied';
+        if (snapshot.status === 'completed') void loadContextUsage(snapshot.sessionId, viewOwnership.current);
+      }
       void refreshWorkspaceOverview();
-    } catch (cause) { messages = originalMessages; prompt = text; error = cause instanceof Error ? cause.message : 'The message could not be sent.'; }
-    finally { if (activeTurnRequestId === requestId) activeTurnRequestId = null; sending = false; }
+    } catch (cause) {
+      if (isTurnVisible(turnOwner)) {
+        if (messages.some((candidate) => candidate.id === optimisticUserId)) messages = originalMessages;
+        if (!prompt) prompt = text;
+        error = cause instanceof Error ? cause.message : 'The message could not be sent.';
+      }
+    }
+    finally {
+      releaseTurn(turnOwner);
+    }
     return accepted;
   }
 
@@ -470,41 +647,45 @@
     restoreDialogOpen = false; restoreTarget = null; await submit(target.text, target);
   }
 
-  function applyTurnSnapshot(snapshot: ChatTurnSnapshot) {
-    if (activeSessionId !== snapshot.sessionId) return;
-    activeTurnApproval = snapshot.approval ? { ...snapshot.approval, requestId: snapshot.requestId } : null;
+  function applyTurnSnapshot(snapshot: ChatTurnSnapshot, owner: TurnOwner) {
+    if (owner.sessionId !== snapshot.sessionId) return;
+    updateTurnState(owner, { approval: snapshot.approval ? { ...snapshot.approval, requestId: snapshot.requestId } : null });
+    if (!isTurnVisible(owner)) return;
     const index = messages.findIndex((message) => message.id === snapshot.message.id);
     if (index === -1) messages = [...messages, snapshot.message];
     else messages = messages.map((message, messageIndex) => messageIndex === index ? snapshot.message : message);
   }
 
   async function stopActiveTurn() {
-    const requestId = activeTurnRequestId;
-    if (!requestId) return;
+    const turn = visibleTurn();
+    const requestId = turn?.owner.requestId;
+    if (!turn || !requestId) return;
     announcement = 'Stopping response…';
     await resolveRemoteResult(sendChatMessage({ operation: 'cancel', requestId })).catch(() => undefined);
   }
 
   async function respondToActiveApproval(choice: 'once' | 'session' | 'always' | 'deny') {
+    const turn = visibleTurn();
     const approval = activeTurnApproval;
-    if (!approval || approvalResponsePending) return;
-    approvalResponsePending = true; error = '';
+    if (!turn || !approval || approvalResponsePending || turn.owner.requestId !== approval.requestId) return;
+    updateTurnState(turn.owner, { approvalPending: true });
+    error = '';
     try {
       const result = await resolveRemoteResult(sendChatMessage({ operation: 'approve', requestId: approval.requestId, choice }));
       if (!result.ok) throw new Error(result.error);
-      if ('snapshot' in result) applyTurnSnapshot(result.snapshot as ChatTurnSnapshot);
+      if (!isTurnVisible(turn.owner) || activeTurnApproval?.requestId !== approval.requestId) return;
+      if ('snapshot' in result) applyTurnSnapshot(result.snapshot as ChatTurnSnapshot, turn.owner);
       announcement = choice === 'deny' ? 'Approval denied' : 'Approval granted';
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'The Hermes approval could not be answered.'; }
-    finally { approvalResponsePending = false; }
+    } catch (cause) {
+      if (isTurnVisible(turn.owner) && activeTurnApproval?.requestId === approval.requestId) error = cause instanceof Error ? cause.message : 'The Hermes approval could not be answered.';
+    }
+    finally {
+      updateTurnState(turn.owner, { approvalPending: false });
+    }
   }
 
   async function refreshWorkspaceOverview() {
-    try {
-      await workspaceOverviewQuery.refresh();
-      overview = await resolveRemoteResult(workspaceOverviewQuery) as Overview;
-    } catch {
-      // The completed conversation remains usable even if sidebar metadata refresh fails.
-    }
+    await loadWorkspace(true, false, true);
   }
 
   async function submitComposer(detail: ComposerSubmitDetail) {
@@ -562,11 +743,7 @@
     if (!message || sending) return;
     commandOpen = false;
     commandQuery = '';
-    activeSurface = null;
-    settingsActive = false;
-    activeSessionId = null;
-    selectedProjectId = null;
-    messages = [];
+    newSession();
     await submit(message);
   }
 
@@ -607,13 +784,22 @@
 
   function chooseSurface(surface: CapabilityFamily | 'capabilities' | null) {
     settingsActive = false; activeSurface = surface; commandOpen = false;
+    if (surface) beginVisibleView(activeSessionId, 'surface');
+    else if (activeSessionId) void selectSession(activeSessionId);
+    else beginVisibleView(null);
   }
 
   function openSettings(sectionId = 'model', itemId?: string) {
+    beginVisibleView(activeSessionId, 'settings');
     settingsActive = true; activeSurface = null; activeSettingsSection = sectionId; activeSettingsItem = itemId; commandOpen = false;
   }
 
-  function closeSettings() { settingsActive = false; activeSettingsItem = undefined; }
+  function closeSettings() {
+    settingsActive = false;
+    activeSettingsItem = undefined;
+    if (activeSessionId) void selectSession(activeSessionId);
+    else beginVisibleView(null);
+  }
 
   function applyDesktopAppearance(preferences: DesktopPreferences) {
     document.documentElement.dataset.themeMode = preferences.appearance.mode;
@@ -706,47 +892,127 @@
     finally { fullscreenPreview = false; }
   }
 
-  async function selectProfile(id: string) {
-    if (id === overview?.activeProfileId) return;
+  async function selectProfile(id: string, targetSessionId?: string) {
+    if (id === overview?.activeProfileId && profileSelectionTargetId === null) {
+      if (targetSessionId && targetSessionId !== activeSessionId) await selectSession(targetSessionId);
+      return;
+    }
+    const intent = profileSelections.enqueue(id, async (profileId) => {
+      await resolveRemoteResult(selectHermesProfile({ id: profileId }));
+    });
+    profileSelectionTargetId = id;
+    profileUiSaveGeneration += 1;
+    presentationSaving = false;
+    const owner = beginVisibleView(null, 'chat', id);
+    messages = [];
+    sessionHistoryError = null;
+    contextUsage = null;
+    selectedProjectId = null;
     loading = true; error = '';
-    try { await resolveRemoteResult(selectHermesProfile({ id })); activeSessionId = null; messages = []; await loadWorkspace(true); announcement = 'Hermes profile switched'; }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Profile switch failed.'; loading = false; }
+    try {
+      await intent.completion;
+      if (!profileSelections.isLatest(intent)) return;
+      // The remote mutation is authoritative even if the user navigated to a
+      // different center surface while it was pending. Project the confirmed
+      // profile immediately, then reconcile the complete overview.
+      if (overview) overview = { ...overview, activeProfileId: id };
+      const loaded = await loadWorkspace(true, false);
+      if (!profileSelections.isLatest(intent)) return;
+      profileSelectionTargetId = null;
+      if (!loaded) {
+        const current = viewOwnership.current;
+        if (current?.profileId === id) beginVisibleView(null, current.location, id, overview?.gateway.connection.id ?? current.connectionId);
+        loading = false;
+        return;
+      }
+      const current = viewOwnership.current;
+      if (current && current.profileId !== overview?.activeProfileId) {
+        beginVisibleView(null, current.location, overview?.activeProfileId ?? id, overview?.gateway.connection.id ?? current.connectionId);
+        messages = [];
+        sessionHistoryError = null;
+        contextUsage = null;
+        selectedProjectId = null;
+      }
+      if (targetSessionId) await selectSession(targetSessionId);
+      else if (ownsVisibleView(owner)) {
+        const initial = overview?.sessions.find((session) => session.source === 'chat' && (session.profileId ?? 'default') === id);
+        if (initial) await selectSession(initial.id);
+      }
+      if (profileSelections.isLatest(intent)) {
+        announcement = 'Hermes profile switched';
+      }
+    }
+    catch (cause) {
+      if (profileSelections.isLatest(intent)) {
+        const failure = cause instanceof Error ? cause.message : 'Profile switch failed.';
+        const lastSuccessfulProfileId = profileSelections.lastSuccessfulTarget ?? overview?.activeProfileId ?? null;
+        if (overview && lastSuccessfulProfileId) overview = { ...overview, activeProfileId: lastSuccessfulProfileId };
+        await loadWorkspace(true, false);
+        if (!profileSelections.isLatest(intent)) return;
+        profileSelectionTargetId = null;
+        const authoritativeProfileId = overview?.activeProfileId ?? lastSuccessfulProfileId;
+        const current = viewOwnership.current;
+        beginVisibleView(null, current?.location ?? 'chat', authoritativeProfileId, overview?.gateway.connection.id ?? current?.connectionId ?? null);
+        messages = [];
+        sessionHistoryError = null;
+        contextUsage = null;
+        selectedProjectId = null;
+        error = failure;
+        loading = false;
+      }
+    }
   }
 
   onMount(() => {
     nativePlatform = window.companion?.platform ?? '';
     const timer = setInterval(() => { clock = Date.now(); }, 1_000);
-    void loadWorkspace();
+    void loadWorkspace(false, true);
     void resolveRemoteResult(desktopSettingsQuery).then((result) => { desktopPreferences = result.preferences; openRouterConfigured = result.openRouter.configured; openRouterVerified = result.openRouter.verified; openRouterVerificationError = result.openRouter.error; applyDesktopAppearance(result.preferences); }).catch(() => undefined);
     void resolveRemoteResult(openRouterPolicyQuery).then((result) => { openRouterPolicy = result; }).catch(() => undefined);
     void window.companion?.invoke<{ version: string; platform: NodeJS.Platform }>('app.info', {}).then((info) => { nativePlatform = info.platform; }).catch(() => undefined);
     return () => clearInterval(timer);
   });
   async function loadProfileUi(connectionId: string) {
-    try { profileUiPreferences = await resolveRemoteResult(getProfileUiPreferences({ connectionId })); sessionPresentation = profileUiPreferences.sessionPresentation; }
-    catch { profileUiPreferences = null; sessionPresentation = 'chats'; }
+    const generation = ++profileUiLoadGeneration;
+    try {
+      const preferences = await resolveRemoteResult(getProfileUiPreferences({ connectionId }));
+      if (generation !== profileUiLoadGeneration || connectionId !== profilePreferenceKey) return;
+      profileUiPreferences = preferences;
+      sessionPresentation = preferences.sessionPresentation;
+    }
+    catch {
+      if (generation !== profileUiLoadGeneration || connectionId !== profilePreferenceKey) return;
+      profileUiPreferences = null;
+      sessionPresentation = 'chats';
+    }
   }
 
   async function selectSessionPresentation(next: SessionPresentation) {
     const connectionId = profilePreferenceKey;
     if (!connectionId || presentationSaving || next === sessionPresentation) return;
+    const generation = ++profileUiSaveGeneration;
+    profileUiLoadGeneration += 1;
     sessionPresentation = next;
     presentationSaving = true;
     try {
-      profileUiPreferences = await resolveRemoteResult(setProfileUiPreferences({ connectionId, preferences: { ...(profileUiPreferences ?? {}), sessionPresentation: next } }));
+      const preferences = await resolveRemoteResult(setProfileUiPreferences({ connectionId, preferences: { ...(profileUiPreferences ?? {}), sessionPresentation: next } }));
+      if (generation === profileUiSaveGeneration && connectionId === profilePreferenceKey) profileUiPreferences = preferences;
     }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Could not save this profile view.'; }
-    finally { presentationSaving = false; }
+    catch (cause) { if (generation === profileUiSaveGeneration && connectionId === profilePreferenceKey) error = cause instanceof Error ? cause.message : 'Could not save this profile view.'; }
+    finally { if (generation === profileUiSaveGeneration) presentationSaving = false; }
   }
 
   async function selectSessionFilter(next: SessionTreeFilter | null) {
     const connectionId = profilePreferenceKey;
     if (!connectionId || presentationSaving) return;
+    const generation = ++profileUiSaveGeneration;
+    profileUiLoadGeneration += 1;
     presentationSaving = true;
     try {
-      profileUiPreferences = await resolveRemoteResult(setProfileUiPreferences({ connectionId, preferences: { ...(profileUiPreferences ?? {}), sessionPresentation, sessionFilter: next } }));
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not save this profile filter.'; }
-    finally { presentationSaving = false; }
+      const preferences = await resolveRemoteResult(setProfileUiPreferences({ connectionId, preferences: { ...(profileUiPreferences ?? {}), sessionPresentation, sessionFilter: next } }));
+      if (generation === profileUiSaveGeneration && connectionId === profilePreferenceKey) profileUiPreferences = preferences;
+    } catch (cause) { if (generation === profileUiSaveGeneration && connectionId === profilePreferenceKey) error = cause instanceof Error ? cause.message : 'Could not save this profile filter.'; }
+    finally { if (generation === profileUiSaveGeneration) presentationSaving = false; }
   }
 
   async function togglePinned(sessionId: string) {
@@ -766,7 +1032,12 @@
     try {
       await resolveRemoteResult(setSessionArchived({ sessionId, profileId: session.profileId ?? undefined, archived: !session.archived }));
       overview = { ...currentOverview, sessions: currentOverview.sessions.map((item) => item.id === sessionId ? { ...item, archived: !session.archived } : item) };
-      if (!session.archived && activeSessionId === sessionId) { activeSessionId = null; messages = []; sessionHistoryError = null; contextUsage = null; }
+      if (!session.archived && activeSessionId === sessionId) {
+        beginVisibleView(null);
+        messages = [];
+        sessionHistoryError = null;
+        contextUsage = null;
+      }
       announcement = session.archived ? 'Session restored' : 'Session archived';
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not update the session archive.'; }
   }
@@ -794,12 +1065,15 @@
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not copy the transcript.'; }
   }
 
-  async function setSessionReadState(sessionId: string, unread: boolean, announce = true) {
+  async function setSessionReadState(sessionId: string, unread: boolean, announce = true, owner?: ViewOwner) {
     try {
       await resolveRemoteResult(setSessionUnread({ sessionId, unread }));
+      if (owner && !ownsVisibleView(owner)) return;
       if (overview) overview = { ...overview, sessions: overview.sessions.map((session) => session.id === sessionId ? { ...session, unread } : session) };
       if (announce) announcement = unread ? 'Session marked unread' : 'Session marked read';
-    } catch (cause) { error = cause instanceof Error ? cause.message : `Could not mark the session ${unread ? 'unread' : 'read'}.`; }
+    } catch (cause) {
+      if (!owner || ownsVisibleView(owner)) error = cause instanceof Error ? cause.message : `Could not mark the session ${unread ? 'unread' : 'read'}.`;
+    }
   }
 
   async function handleSessionDeleted(sessionId: string) {
@@ -812,13 +1086,13 @@
     }
     sessionActionTargetId = null;
     if (activeSessionId === sessionId) {
-      activeSessionId = null;
+      beginVisibleView(null);
       messages = [];
       sessionHistoryError = null;
       contextUsage = null;
     }
     announcement = 'Session deleted';
-    await loadWorkspace(true);
+    await loadWorkspace(true, true);
   }
 
   async function handleProjectDeleted(projectId: string) {
@@ -908,7 +1182,7 @@
             <div class="header-context"><strong>{activeSurface ?? activeSession?.title ?? (workspaceIsProjectScoped ? 'Project session' : 'New conversation')}</strong><span class="context-meta">{activeSurface ? 'Hermes capability' : workspaceIsProjectScoped ? activeProject?.name ?? 'Project' : activeProfile?.name ?? 'Hermes Agent'}</span>{#if !activeSurface && activeWorktree}<Badge variant="outline">{activeWorktree.branch}</Badge>{/if}</div>
             <div class="header-drag-space" aria-hidden="true"></div>
             <div class="header-actions">
-              {#if activeSurface}<Button size="sm" variant="ghost" onclick={() => (activeSurface = null)}><ArrowLeft data-icon="inline-start" /> Back</Button>{/if}
+              {#if activeSurface}<Button size="sm" variant="ghost" onclick={() => chooseSurface(null)}><ArrowLeft data-icon="inline-start" /> Back</Button>{/if}
               {#if !activeSurface && primaryProfileAction}
                 <ButtonGroup.Root><Button size="sm" variant="outline" disabled={!activeWorktree} onclick={() => void runProfileAction(primaryProfileAction)}><Play data-icon="inline-start" /> {primaryProfileAction.name}</Button><DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} size="icon-sm" variant="outline" aria-label="Choose profile action"><ChevronDown /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group>{#each profileUiPreferences?.header.customActions ?? [] as action (action.id)}<DropdownMenu.Item onclick={() => void runProfileAction(action)}><Play />{action.name}{#if action.keybinding}<DropdownMenu.Shortcut>{action.keybinding}</DropdownMenu.Shortcut>{/if}</DropdownMenu.Item>{/each}<DropdownMenu.Item onclick={() => chooseSurface('profiles')}><Plus />Configure actions</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root></ButtonGroup.Root>
               {/if}
@@ -956,7 +1230,7 @@
                     {#if message.role === 'user' && message.text.trim()}<Button class="message-restore" size="icon-xs" variant="ghost" disabled={sending} aria-label="Restore checkpoint from this prompt" title="Restore checkpoint — rerun from this prompt" onclick={() => requestCheckpointRestore(messageIndex)}><RotateCcw /></Button>{/if}
                   </Message.Root>
                 {/each}
-              {:else if activeSessionId}<Conversation.EmptyState title="" description=""><div class="session-empty-state">{#if sessionHistoryError}<CircleAlert /><h1>History unavailable</h1><p>{sessionHistoryError}</p><div><Button size="sm" variant="outline" onclick={() => void selectSession(activeSessionId!)}>Retry</Button><Button size="sm" variant="ghost" onclick={() => { activeSessionId = null; sessionHistoryError = null; }}>New chat</Button></div>{:else}<h1>No messages yet</h1><p>Send a message to begin this session.</p>{/if}</div></Conversation.EmptyState>
+              {:else if activeSessionId}<Conversation.EmptyState title="" description=""><div class="session-empty-state">{#if sessionHistoryError}<CircleAlert /><h1>History unavailable</h1><p>{sessionHistoryError}</p><div><Button size="sm" variant="outline" onclick={() => void selectSession(activeSessionId!)}>Retry</Button><Button size="sm" variant="ghost" onclick={() => newSession()}>New chat</Button></div>{:else}<h1>No messages yet</h1><p>Send a message to begin this session.</p>{/if}</div></Conversation.EmptyState>
               {:else}<Conversation.EmptyState title="Start with Hermes" description=""><div class="welcome-state"><div class="welcome-mark"><Sparkles /></div><h1>Ask Hermes anything</h1><p>{composerAvailable ? 'Start a conversation, plan work, or continue an existing session.' : 'Connect Hermes or configure OpenRouter to begin.'}</p>
                 <div class="new-session-composer"><ChatComposer
                   id="new-session-composer" placement="new-session" bind:prompt busy={sending}
@@ -988,7 +1262,7 @@
           {/if}
         </section>
       <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={loadWorkspace} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">
@@ -1018,7 +1292,7 @@
 <AppNotification message={error} ondismiss={() => (error = '')} />
 
 <ConnectionDialog bind:open={connectOpen} connection={overview?.connections.find((connection) => connection.id === overview?.gateway.connection.id) ?? overview?.gateway.connection ?? null} onconnected={() => loadWorkspace()} />
-<ProfileDialog bind:open={profileOpen} profiles={overview?.profiles ?? []} oncreated={() => { activeSessionId = null; void loadWorkspace(true); }} />
+<ProfileDialog bind:open={profileOpen} profiles={overview?.profiles ?? []} oncreated={() => { newSession(); void loadWorkspace(true, true); }} />
 <RestoreCheckpointDialog bind:open={restoreDialogOpen} prompt={restoreTarget?.text ?? ''} pending={sending} onrestore={() => void confirmCheckpointRestore()} />
 <ProjectDialog bind:open={projectsOpen} projects={overview?.projects ?? []} worktrees={overview?.worktrees ?? []} connectionKind={overview?.gateway.connection.kind ?? 'local'} onchanged={() => loadWorkspace()} oncreated={startProjectThread} />
 <ProjectActionsDialog bind:open={projectActionsOpen} project={overview?.projects.find((project) => project.id === projectActionTargetId) ?? null} onchanged={() => loadWorkspace(true)} ondeleted={(projectId) => void handleProjectDeleted(projectId)} />

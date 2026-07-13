@@ -50,7 +50,8 @@ describe('Hermes chat streaming architecture', () => {
     const draftStart = page.indexOf('function newSession(');
     const draftEnd = page.indexOf('async function startProjectThread', draftStart);
     const draft = page.slice(draftStart, draftEnd);
-    expect(draft).toContain('activeSessionId = null');
+    expect(draft).toContain('beginVisibleView(null');
+    expect(draft).toContain('crypto.randomUUID()');
     expect(draft).toContain('messages = []');
     expect(draft).not.toContain('createSession(');
     expect(page).not.toContain("import { createSession,");
