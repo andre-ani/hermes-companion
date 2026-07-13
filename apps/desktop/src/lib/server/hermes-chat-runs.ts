@@ -1,4 +1,4 @@
-import { ChatTurnSnapshot, HermesMessage, type ChatAttachmentInput, type ChatTurnApproval, type ChatTurnSnapshot as ChatTurnSnapshotValue, type HermesMessage as HermesMessageValue } from '@hermes-companion/contracts';
+import { ChatTurnSnapshot, HermesMessage, RecoverableChatTurn, type ChatAttachmentInput, type ChatTurnApproval, type ChatTurnSnapshot as ChatTurnSnapshotValue, type HermesMessage as HermesMessageValue, type RecoverableChatTurn as RecoverableChatTurnValue } from '@hermes-companion/contracts';
 import { humanizeModelId, modelProviderFromId } from '../model-identity.js';
 import { getActiveHermesClient } from './hermes-client.js';
 import { HermesRpcSocket, HermesTransportDisconnectedError } from './hermes-serve-runs.js';
@@ -18,6 +18,7 @@ type State = {
   promptDispatched: boolean;
   sequence: number;
   latest: ChatTurnSnapshotValue;
+  userMessage: HermesMessageValue;
   message: HermesMessageValue;
   socket: HermesRpcSocket;
   waiters: Set<() => void>;
@@ -31,11 +32,13 @@ type State = {
 };
 
 const runs = new Map<string, State>();
+const sessionClaims = new Map<string, string>();
 const terminalStatuses = new Set<ChatTurnSnapshotValue['status']>(['completed', 'cancelled', 'failed', 'interrupted']);
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 const string = (value: unknown) => typeof value === 'string' ? value : '';
 
 const wake = (run: State) => { for (const waiter of run.waiters) waiter(); run.waiters.clear(); };
+const sessionClaimKey = (connectionId: string, profileId: string, sessionId: string) => `${connectionId}\u0000${profileId}\u0000${sessionId}`;
 const publish = (run: State, update: Partial<HermesMessageValue>, status: ChatTurnSnapshotValue['status'], error: string | null = null) => {
   const terminal = terminalStatuses.has(status);
   if (terminal && run.recoveryTimer) clearTimeout(run.recoveryTimer);
@@ -53,7 +56,12 @@ const publish = (run: State, update: Partial<HermesMessageValue>, status: ChatTu
 };
 
 const retire = (run: State) => {
-  const timer = setTimeout(() => { if (runs.get(run.requestId) === run) runs.delete(run.requestId); }, 5 * 60_000);
+  const timer = setTimeout(() => {
+    if (runs.get(run.requestId) !== run) return;
+    runs.delete(run.requestId);
+    const key = sessionClaimKey(run.owner.connectionId, run.owner.profileId, run.sessionId);
+    if (sessionClaims.get(key) === run.requestId) sessionClaims.delete(key);
+  }, 5 * 60_000);
   timer.unref?.();
 };
 
@@ -125,6 +133,18 @@ export async function startHermesChatTurn(input: StartInput) {
   const connection = getActiveHermesClient().executionContext().connection;
   const profileId = input.profileId ?? connection.hermesProfileId ?? 'default';
 
+  let claimedSessionKey: string | null = null;
+  const claimSession = (sessionId: string) => {
+    const key = sessionClaimKey(connection.id, profileId, sessionId);
+    const claimantId = sessionClaims.get(key);
+    const claimant = claimantId ? runs.get(claimantId) : null;
+    if (claimant && !claimant.terminal && claimant.requestId !== input.requestId) throw new Error('This Hermes session already has an active response.');
+    sessionClaims.set(key, input.requestId);
+    claimedSessionKey = key;
+  };
+  if (input.sessionId) claimSession(input.sessionId);
+
+  try {
   let run!: State;
   let resumeSessionId = input.sessionId ?? '';
   let transportSessionId = '';
@@ -288,6 +308,7 @@ export async function startHermesChatTurn(input: StartInput) {
   }
   if (!session.session_id) { socket.close(); throw new Error('Hermes did not return a session id.'); }
   const persistedSessionId = input.sessionId ?? session.stored_session_id ?? session.session_key ?? session.session_id;
+  if (!claimedSessionKey) claimSession(persistedSessionId);
   transportSessionId = session.session_id;
   resumeSessionId = stableSessionKey(session, persistedSessionId);
   baselineMessageCount = messageCount(session);
@@ -314,6 +335,14 @@ export async function startHermesChatTurn(input: StartInput) {
   const submittedText = [contextRefs.join('\n'), input.message].filter(Boolean).join('\n\n') || (hasVisualAttachment ? 'Review the attached content.' : '');
   if (!submittedText) { socket.close(); throw new Error('Enter a message or attach a supported file.'); }
   const modelId = input.model || 'default';
+  const userMessage = HermesMessage.parse({
+    id: `optimistic-user-${input.requestId}`,
+    sessionId: persistedSessionId,
+    role: 'user',
+    text: input.message,
+    createdAt: new Date().toISOString(),
+    attachments: (input.attachments ?? []).map((attachment) => ({ type: 'file' as const, filename: attachment.filename, mediaType: attachment.mediaType }))
+  });
   const message = HermesMessage.parse({
     id: `hermes-assistant-${input.requestId}`,
     sessionId: persistedSessionId,
@@ -340,6 +369,7 @@ export async function startHermesChatTurn(input: StartInput) {
     promptDispatched: false,
     sequence: 0,
     latest: initial,
+    userMessage,
     message,
     socket,
     waiters: new Set(),
@@ -361,6 +391,20 @@ export async function startHermesChatTurn(input: StartInput) {
     failRun(run, cause instanceof Error ? cause.message : 'Hermes rejected the prompt.', text, reasoning);
   });
   return initial;
+  } catch (cause) {
+    if (claimedSessionKey && sessionClaims.get(claimedSessionKey) === input.requestId && !runs.has(input.requestId)) sessionClaims.delete(claimedSessionKey);
+    throw cause;
+  }
+}
+
+export function getHermesChatTurnRecovery(sessionId: string, profileId?: string): RecoverableChatTurnValue | null {
+  const connection = getActiveHermesClient().executionContext().connection;
+  const ownerProfileId = profileId ?? connection.hermesProfileId ?? 'default';
+  const requestId = sessionClaims.get(sessionClaimKey(connection.id, ownerProfileId, sessionId));
+  if (!requestId) return null;
+  const run = runs.get(requestId);
+  if (!run || run.sessionId !== sessionId || run.owner.connectionId !== connection.id || run.owner.profileId !== ownerProfileId) return null;
+  return RecoverableChatTurn.parse({ userMessage: run.userMessage, snapshot: run.latest, baselineMessageCount: run.baselineMessageCount });
 }
 
 export async function nextHermesChatTurn(requestId: string, afterSequence: number) {

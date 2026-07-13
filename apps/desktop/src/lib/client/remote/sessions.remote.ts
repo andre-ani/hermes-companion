@@ -2,7 +2,7 @@ import { command, query } from '$app/server';
 import { ChatTurnControl, ChatTurnSnapshot, ContextUsage, HermesMessage, z } from '@hermes-companion/contracts';
 import { getCompanionRepository } from '$lib/server/companion-repository';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
-import { cancelHermesChatTurn, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '$lib/server/hermes-chat-runs';
+import { cancelHermesChatTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '$lib/server/hermes-chat-runs';
 import { requestHermesServe } from '$lib/server/hermes-serve-runs';
 
 const sessionId = z.object({ sessionId: z.string().min(1), profileId: z.string().min(1).optional() });
@@ -35,6 +35,11 @@ export const getSessionMessages = query(sessionId, async ({ sessionId, profileId
   }
   return getActiveHermesClient().getMessages(sessionId);
 });
+
+export const recoverSessionTurn = query(sessionId, async ({ sessionId, profileId }) =>
+  getHermesChatTurnRecovery(sessionId, profileId)
+);
+
 export const searchSessions = query(z.object({
   query: z.string().trim().min(2).max(500),
   profileIds: z.array(z.string().trim().min(1).max(120)).max(20).default([])

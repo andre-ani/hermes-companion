@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { setActiveHermesClient } from '../apps/desktop/src/lib/server/hermes-client';
-import { cancelHermesChatTurn, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '../apps/desktop/src/lib/server/hermes-chat-runs';
+import { cancelHermesChatTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '../apps/desktop/src/lib/server/hermes-chat-runs';
 
 const servers: WebSocketServer[] = [];
 
@@ -242,5 +242,42 @@ describe('Hermes chat streaming', () => {
     expect(promptCount).toBe(1);
     expect(connectionCount).toBe(2);
     expect(resumedParams).toEqual({ session_id: 'stable-session', cols: 96, profile: 'hermes-code' });
+  });
+
+  it('recovers an owned active or just-finished turn and rejects a duplicate active response', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    server.on('connection', (socket) => socket.on('message', (raw) => {
+      const request = JSON.parse(raw.toString()) as { id: number; method: string };
+      if (request.method === 'session.resume') socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: 'transport-recovery', session_key: 'stable-recovery', messages: [] } }));
+      else if (request.method === 'image.attach_bytes' || request.method === 'prompt.submit') socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { status: 'ok' } }));
+      else if (request.method === 'session.interrupt') socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { interrupted: true } }));
+    }));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('WebSocket test server did not bind.');
+    const owner = {
+      id: 'recovery-owner', name: 'Hermes', description: '', kind: 'local' as const, url: 'http://127.0.0.1:8642', controlUrl: null,
+      serveUrl: null, serveWsUrl: `ws://127.0.0.1:${address.port}`, bridgeUrl: null, hermesProfileId: 'hermes-code'
+    };
+    setActiveHermesClient(owner);
+
+    const requestId = crypto.randomUUID();
+    await startHermesChatTurn({ requestId, sessionId: 'stable-recovery', profileId: 'hermes-code', message: 'Inspect this image', attachments: [{ filename: 'screen.png', mediaType: 'image/png', dataUrl: 'data:image/png;base64,AA==' }] });
+    expect(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')).toMatchObject({
+      userMessage: { role: 'user', text: 'Inspect this image', attachments: [{ filename: 'screen.png', mediaType: 'image/png' }] },
+      snapshot: { requestId, status: 'streaming', sessionId: 'stable-recovery' },
+      baselineMessageCount: 0
+    });
+    expect(JSON.stringify(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')?.userMessage)).not.toContain('data:image');
+    expect(getHermesChatTurnRecovery('stable-recovery', 'other-profile')).toBeNull();
+
+    await expect(startHermesChatTurn({ requestId: crypto.randomUUID(), sessionId: 'stable-recovery', profileId: 'hermes-code', message: 'Duplicate' })).rejects.toThrow('already has an active response');
+    await expect(cancelHermesChatTurn(requestId)).resolves.toBe(true);
+    expect(getHermesChatTurnRecovery('stable-recovery', 'hermes-code')).toMatchObject({ snapshot: { requestId, status: 'cancelled' } });
+
+    const replacementId = crypto.randomUUID();
+    await expect(startHermesChatTurn({ requestId: replacementId, sessionId: 'stable-recovery', profileId: 'hermes-code', message: 'Continue after stop' })).resolves.toMatchObject({ requestId: replacementId, status: 'streaming' });
+    await cancelHermesChatTurn(replacementId);
   });
 });

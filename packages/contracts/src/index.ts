@@ -559,6 +559,17 @@ export const ChatTurnSnapshot = z.object({
 });
 export type ChatTurnSnapshot = z.infer<typeof ChatTurnSnapshot>;
 
+export const RecoverableChatTurn = z.object({
+  userMessage: HermesMessage,
+  snapshot: ChatTurnSnapshot,
+  baselineMessageCount: z.number().int().nonnegative()
+}).superRefine(({ userMessage, snapshot }, context) => {
+  if (userMessage.role !== 'user') context.addIssue({ code: 'custom', message: 'A recoverable turn must include its user message.', path: ['userMessage', 'role'] });
+  if (userMessage.sessionId !== snapshot.sessionId) context.addIssue({ code: 'custom', message: 'Recoverable turn messages must belong to the same session.', path: ['userMessage', 'sessionId'] });
+  if (userMessage.generation !== null) context.addIssue({ code: 'custom', message: 'The recovered user message cannot own assistant generation state.', path: ['userMessage', 'generation'] });
+});
+export type RecoverableChatTurn = z.infer<typeof RecoverableChatTurn>;
+
 export const ChatAttachmentInput = z.object({
   filename: z.string().trim().min(1).max(255),
   mediaType: z.string().trim().min(1).max(160),

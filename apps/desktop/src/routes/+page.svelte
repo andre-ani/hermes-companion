@@ -32,7 +32,7 @@
   import AppNotification from '$lib/components/companion/app-notification.svelte';
   import ModelProvenance from '$lib/components/companion/model-provenance.svelte';
   import { getWorkspaceOverview, selectHermesProfile } from '$lib/client/remote/gateway.remote';
-  import { getSessionContextUsage, getSessionMessages, searchSessions, sendChatMessage, setSessionArchived, setSessionUnread } from '$lib/client/remote/sessions.remote';
+  import { getSessionContextUsage, getSessionMessages, recoverSessionTurn, searchSessions, sendChatMessage, setSessionArchived, setSessionUnread } from '$lib/client/remote/sessions.remote';
   import { bindHermesProjectWorktree, getProjectSessions, resolveSessionWorkspaceTarget, setProjectArchived } from '$lib/client/remote/projects.remote';
   import { getProfileUiPreferences, setProfileUiPreferences, setSessionPinned } from '$lib/client/remote/profile-ui.remote';
   import { runHermesMaintenance, setHermesApprovalMode } from '$lib/client/remote/operations.remote';
@@ -137,7 +137,14 @@
   let openRouterVerificationError = $state<string | null>(null);
   let openRouterPolicy = $state<OpenRouterPolicyOverview | null>(null);
   type TurnOwner = { requestId: string; connectionId: string | null; profileId: string | null; sessionId: string | null; draftId: string | null };
-  type RendererTurnState = { owner: TurnOwner; approval: (ChatTurnApproval & { requestId: string }) | null; approvalPending: boolean };
+  type RendererTurnState = {
+    owner: TurnOwner;
+    approval: (ChatTurnApproval & { requestId: string }) | null;
+    approvalPending: boolean;
+    userMessage: HermesMessage | null;
+    snapshot: ChatTurnSnapshot | null;
+    baselineMessageCount: number | null;
+  };
   let activeTurns = $state<Record<string, RendererTurnState>>({});
   const viewOwnership = new ViewOwnership();
   let visibleViewOwner = $state<ViewOwner | null>(null);
@@ -650,8 +657,8 @@
       && activeSessionId === owner.sessionId);
   }
 
-  function registerTurn(owner: TurnOwner) {
-    activeTurns = { ...activeTurns, [turnKey(owner)]: { owner, approval: null, approvalPending: false } };
+  function registerTurn(owner: TurnOwner, userMessage: HermesMessage | null = null, snapshot: ChatTurnSnapshot | null = null, baselineMessageCount: number | null = null) {
+    activeTurns = { ...activeTurns, [turnKey(owner)]: { owner, approval: null, approvalPending: false, userMessage, snapshot, baselineMessageCount } };
     if (isTurnVisible(owner)) projectVisibleTurn();
   }
 
@@ -661,7 +668,11 @@
     const adopted = { ...owner, sessionId, draftId: null };
     const next = { ...activeTurns };
     delete next[previousKey];
-    next[turnKey(adopted)] = { ...(state ?? { approval: null, approvalPending: false }), owner: adopted };
+    next[turnKey(adopted)] = {
+      ...(state ?? { approval: null, approvalPending: false, userMessage: null, snapshot: null, baselineMessageCount: null }),
+      owner: adopted,
+      userMessage: state?.userMessage ? { ...state.userMessage, sessionId } : null
+    };
     activeTurns = next;
     projectVisibleTurn();
     return adopted;
@@ -684,11 +695,103 @@
     projectVisibleTurn();
   }
 
+  function stillOwnsTurn(owner: TurnOwner) {
+    return activeTurns[turnKey(owner)]?.owner.requestId === owner.requestId;
+  }
+
   function mergeHistoryWithVisibleMessages(history: HermesMessage[]) {
     const visibleById = new Map(messages.map((message) => [message.id, message]));
     const merged = history.map((message) => visibleById.get(message.id) ?? message);
     const historyIds = new Set(history.map((message) => message.id));
     return [...merged, ...messages.filter((message) => !historyIds.has(message.id))];
+  }
+
+  function mergeTransientTurn(state: RendererTurnState) {
+    const recoveredUser = state.userMessage;
+    if (recoveredUser) {
+      const duplicate = messages.some((message) => message.id === recoveredUser.id)
+        || (state.baselineMessageCount !== null && messages.length > state.baselineMessageCount);
+      if (!duplicate) messages = [...messages, recoveredUser];
+    }
+    if (state.snapshot) applyTurnSnapshot(state.snapshot, state.owner);
+  }
+
+  async function consumeTurn(initial: ChatTurnSnapshot, owner: TurnOwner) {
+    let snapshot = initial;
+    let retryCount = 0;
+    applyTurnSnapshot(snapshot, owner);
+    while (snapshot.status === 'streaming') {
+      try {
+        const next = await resolveRemoteResult(sendChatMessage({ operation: 'next', requestId: snapshot.requestId, afterSequence: snapshot.sequence }));
+        if (!next.ok) throw new Error(next.error);
+        if (!('snapshot' in next)) throw new Error('Hermes stopped reporting response progress.');
+        snapshot = next.snapshot as ChatTurnSnapshot;
+        retryCount = 0;
+        applyTurnSnapshot(snapshot, owner);
+      } catch (cause) {
+        if (!stillOwnsTurn(owner)) throw cause;
+        retryCount += 1;
+        if (isTurnVisible(owner)) announcement = 'Hermes connection interrupted. Reconnecting…';
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, 400 * (2 ** Math.min(retryCount - 1, 4)))));
+        if (!stillOwnsTurn(owner)) throw cause;
+        if (retryCount % 3 !== 0 || !owner.sessionId) continue;
+        try {
+          const recovery = await resolveRemoteResult(recoverSessionTurn({ sessionId: owner.sessionId, profileId: owner.profileId ?? undefined }));
+          if (!recovery) throw cause;
+          if (recovery.snapshot.requestId !== owner.requestId) throw new Error('A different Hermes response now owns this session.');
+          updateTurnState(owner, { userMessage: recovery.userMessage, snapshot: recovery.snapshot, baselineMessageCount: recovery.baselineMessageCount });
+          snapshot = recovery.snapshot;
+          applyTurnSnapshot(snapshot, owner);
+        } catch {
+          // The next retry remains the durable wake-up path while Hermes or the network recovers.
+        }
+      }
+    }
+    return snapshot;
+  }
+
+  function presentCompletedTurn(snapshot: ChatTurnSnapshot, owner: TurnOwner) {
+    if (isTurnVisible(owner)) {
+      if (snapshot.status === 'failed') error = snapshot.error ?? 'The response did not finish.';
+      else if (snapshot.status === 'cancelled' || snapshot.status === 'interrupted') announcement = 'Response stopped';
+      else announcement = 'Hermes replied';
+      if (snapshot.status === 'completed') void loadContextUsage(snapshot.sessionId, viewOwnership.current);
+    }
+    void refreshWorkspaceOverview();
+  }
+
+  async function reattachSessionTurn(sessionId: string, profileId: string | undefined, owner: ViewOwner) {
+    const ownerKey = turnKey({ connectionId: owner.connectionId, profileId: owner.profileId, sessionId, draftId: null });
+    const rendererTurn = activeTurns[ownerKey];
+    if (rendererTurn) {
+      if (ownsVisibleView(owner)) mergeTransientTurn(rendererTurn);
+      return;
+    }
+    try {
+      const recovery = await resolveRemoteResult(recoverSessionTurn({ sessionId, profileId }));
+      if (!recovery || !ownsVisibleView(owner)) return;
+      const turnOwner: TurnOwner = {
+        requestId: recovery.snapshot.requestId,
+        connectionId: owner.connectionId,
+        profileId: owner.profileId,
+        sessionId,
+        draftId: null
+      };
+      registerTurn(turnOwner, recovery.userMessage, recovery.snapshot, recovery.baselineMessageCount);
+      mergeTransientTurn({ owner: turnOwner, approval: null, approvalPending: false, userMessage: recovery.userMessage, snapshot: recovery.snapshot, baselineMessageCount: recovery.baselineMessageCount });
+      void (async () => {
+        try {
+          const snapshot = await consumeTurn(recovery.snapshot, turnOwner);
+          presentCompletedTurn(snapshot, turnOwner);
+        } catch (cause) {
+          if (isTurnVisible(turnOwner)) error = errorMessage(cause, 'The active Hermes response could not be reattached.');
+        } finally {
+          releaseTurn(turnOwner);
+        }
+      })();
+    } catch (cause) {
+      if (ownsVisibleView(owner)) error = errorMessage(cause, 'The active Hermes response could not be recovered.');
+    }
   }
 
   async function hydrateProject(projectId: string) {
@@ -768,15 +871,19 @@
     activeSurface = null; settingsActive = false; error = ''; sessionHistoryError = null; messages = [];
     activeModelKey = session?.model ? modelSelectionKey('hermes', session.model, session.provider) : null;
     if (session?.unread) await setSessionReadState(sessionId, false, false, owner);
+    const recovery = reattachSessionTurn(sessionId, session?.profileId ?? undefined, owner);
     try {
       const history = await resolveRemoteResult(getSessionMessages({ sessionId, profileId: session?.profileId ?? undefined })) as HermesMessage[];
       if (!ownsVisibleView(owner)) return;
       messages = mergeHistoryWithVisibleMessages(history);
-      void loadContextUsage(sessionId, owner);
     }
     catch (cause) {
       if (!ownsVisibleView(owner)) return;
       sessionHistoryError = cause instanceof Error ? cause.message : 'Session history could not be loaded.';
+    }
+    finally {
+      await recovery;
+      if (ownsVisibleView(owner)) void loadContextUsage(sessionId, owner);
     }
   }
 
@@ -858,6 +965,7 @@
   async function submit(message = prompt, restore?: { messageIndex: number; userOrdinal: number }, attachments: ChatAttachmentInput[] = []) {
     const text = message.trim(); if ((!text && !attachments.length) || sending) return false;
     let accepted = false;
+    let completed = false;
     let viewOwner = ensureChatOwner();
     sending = true; prompt = ''; error = '';
     const originalMessages = messages;
@@ -871,8 +979,9 @@
       : null;
     const provisionalSessionId = originalSessionId ?? `local-${requestId}`;
     let turnOwner: TurnOwner = { requestId, connectionId: viewOwner.connectionId, profileId: viewOwner.profileId, sessionId: originalSessionId, draftId: viewOwner.draftId };
-    registerTurn(turnOwner);
-    messages = [...(restore ? messages.slice(0, restore.messageIndex) : messages), { id: optimisticUserId, sessionId: provisionalSessionId, role: 'user', text, createdAt: new Date().toISOString(), reasoning: null, thinkingStatus: null, toolCalls: [], attachments: attachments.map((attachment) => ({ type: 'file' as const, filename: attachment.filename, mediaType: attachment.mediaType, url: attachment.mediaType.startsWith('image/') ? attachment.dataUrl : undefined })), checkpoints: [], inference: null, generation: null }];
+    const optimisticUserMessage: HermesMessage = { id: optimisticUserId, sessionId: provisionalSessionId, role: 'user', text, createdAt: new Date().toISOString(), reasoning: null, thinkingStatus: null, toolCalls: [], attachments: attachments.map((attachment) => ({ type: 'file' as const, filename: attachment.filename, mediaType: attachment.mediaType, url: attachment.mediaType.startsWith('image/') ? attachment.dataUrl : undefined })), checkpoints: [], inference: null, generation: null };
+    registerTurn(turnOwner, optimisticUserMessage);
+    messages = [...(restore ? messages.slice(0, restore.messageIndex) : messages), optimisticUserMessage];
     try {
       const result = await resolveRemoteResult(sendChatMessage({
         operation: 'send', requestId, sessionId: originalSessionId ?? undefined, message: text, attachments,
@@ -935,30 +1044,22 @@
         }
       }
       if (isTurnVisible(turnOwner)) messages = messages.map((candidate) => candidate.id === optimisticUserId ? { ...candidate, sessionId: snapshot.sessionId } : candidate);
-      applyTurnSnapshot(snapshot, turnOwner);
-      while (snapshot.status === 'streaming') {
-        const next = await resolveRemoteResult(sendChatMessage({ operation: 'next', requestId, afterSequence: snapshot.sequence }));
-        if (!next.ok) throw new Error(next.error);
-        if (!('snapshot' in next)) throw new Error('Hermes stopped reporting response progress.');
-        snapshot = next.snapshot as ChatTurnSnapshot;
-        applyTurnSnapshot(snapshot, turnOwner);
-      }
-      if (isTurnVisible(turnOwner)) {
-        if (snapshot.status === 'failed') error = snapshot.error ?? 'The response did not finish.';
-        else if (snapshot.status === 'cancelled' || snapshot.status === 'interrupted') announcement = 'Response stopped';
-        else announcement = 'Hermes replied';
-        if (snapshot.status === 'completed') void loadContextUsage(snapshot.sessionId, viewOwnership.current);
-      }
-      void refreshWorkspaceOverview();
+      snapshot = await consumeTurn(snapshot, turnOwner);
+      presentCompletedTurn(snapshot, turnOwner);
+      completed = true;
     } catch (cause) {
       if (isTurnVisible(turnOwner)) {
-        if (messages.some((candidate) => candidate.id === optimisticUserId)) messages = originalMessages;
-        if (!prompt) prompt = text;
-        error = cause instanceof Error ? cause.message : 'The message could not be sent.';
+        if (!accepted) {
+          if (messages.some((candidate) => candidate.id === optimisticUserId)) messages = originalMessages;
+          if (!prompt) prompt = text;
+          error = cause instanceof Error ? cause.message : 'The message could not be sent.';
+        } else {
+          error = errorMessage(cause, 'Hermes accepted the message, but response progress could not be confirmed. Reload this session to recover it.');
+        }
       }
     }
     finally {
-      releaseTurn(turnOwner);
+      if (!accepted || completed) releaseTurn(turnOwner);
     }
     return accepted;
   }
@@ -975,7 +1076,7 @@
 
   function applyTurnSnapshot(snapshot: ChatTurnSnapshot, owner: TurnOwner) {
     if (owner.sessionId !== snapshot.sessionId) return;
-    updateTurnState(owner, { approval: snapshot.approval ? { ...snapshot.approval, requestId: snapshot.requestId } : null });
+    updateTurnState(owner, { approval: snapshot.approval ? { ...snapshot.approval, requestId: snapshot.requestId } : null, snapshot });
     if (!isTurnVisible(owner)) return;
     const index = messages.findIndex((message) => message.id === snapshot.message.id);
     if (index === -1) messages = [...messages, snapshot.message];
