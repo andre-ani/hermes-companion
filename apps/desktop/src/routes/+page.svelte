@@ -1328,6 +1328,13 @@
       await resolveRemoteResult(selectHermesProfile({ id: profileId }));
     });
     profileSelectionTargetId = id;
+    // Model and UI selections are draft projections owned by the current
+    // profile. Invalidate them before the target profile is hydrated so a
+    // shared model id cannot become an explicit override in the new chat.
+    activeModelKey = null;
+    profileUiLoadGeneration += 1;
+    profileUiPreferences = null;
+    sessionPresentation = 'chats';
     profileUiSaveGeneration += 1;
     presentationSaving = false;
     const owner = beginVisibleView(null, 'chat', id);

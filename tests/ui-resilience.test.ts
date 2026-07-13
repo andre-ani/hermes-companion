@@ -302,6 +302,17 @@ describe('shell resilience', () => {
     expect(page).not.toContain("=== profileId) ?? overview.sessions[0]");
   });
 
+  it('invalidates profile-scoped draft projections before hydrating a new profile', async () => {
+    const page = await source('routes/+page.svelte');
+    const start = page.indexOf('async function selectProfile');
+    const end = page.indexOf('async function loadProfileUi', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const selectProfile = page.slice(start, end);
+    expect(selectProfile).toContain('activeModelKey = null;');
+    expect(selectProfile).toContain('profileUiPreferences = null;');
+    expect(selectProfile).toContain('sessionPresentation = \'chats\';');
+  });
+
   it('keeps session hover details compact, complete, and backed by session metadata', async () => {
     const navigation = await source('lib/components/companion/session-navigation.svelte');
     expect(navigation).toContain('class="session-detail-list"');
