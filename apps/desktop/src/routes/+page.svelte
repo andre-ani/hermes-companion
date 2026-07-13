@@ -382,6 +382,18 @@
     if (worktree) void selectProjectThread(worktree.projectId, worktree.threadId);
   }
 
+  async function bindCreatedWorktree(input: { projectId: string; repositoryPath: string; worktreePath: string; branch: string; sessionId: string }) {
+    let lastFailure: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try { return await resolveRemoteResult(bindHermesProjectWorktree(input)); }
+      catch (cause) {
+        lastFailure = cause;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+    }
+    throw new Error(errorMessage(lastFailure, 'The Hermes session could not be bound to its worktree.'));
+  }
+
   async function submit(message = prompt, restore?: { messageIndex: number; userOrdinal: number }, attachments: ChatAttachmentInput[] = []) {
     const text = message.trim(); if ((!text && !attachments.length) || sending) return false;
     let accepted = false;
@@ -411,7 +423,7 @@
         activeSessionId = snapshot.sessionId;
         if (pendingWorktreeBinding) {
           try {
-            const boundWorktree = await resolveRemoteResult(bindHermesProjectWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId }));
+            const boundWorktree = await bindCreatedWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId });
             if (overview) {
               overview = {
                 ...overview,
@@ -423,7 +435,7 @@
             }
             await refreshWorkspaceOverview();
           } catch (cause) {
-            error = cause instanceof Error ? cause.message : 'The Hermes session could not be bound to its worktree.';
+            error = errorMessage(cause, 'The Hermes session could not be bound to its worktree.');
           }
         }
       }

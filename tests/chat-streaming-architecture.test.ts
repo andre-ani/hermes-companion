@@ -182,7 +182,7 @@ describe('Hermes chat streaming architecture', () => {
   it('merges a successful worktree bind before background overview refresh', async () => {
     const page = await source('routes/+page.svelte');
 
-    const binding = /const\s+(\w+)\s*=\s*await resolveRemoteResult\(bindHermesProjectWorktree\(/.exec(page);
+    const binding = /const\s+(\w+)\s*=\s*await bindCreatedWorktree\(/.exec(page);
     expect(binding).not.toBeNull();
     const boundWorktree = binding?.[1] ?? 'boundWorktree';
     const bindingStart = binding?.index ?? -1;
@@ -195,5 +195,7 @@ describe('Hermes chat streaming architecture', () => {
     const immediateMerge = page.slice(overviewMergeStart, refreshStart);
     expect(immediateMerge).toContain('worktrees:');
     expect(immediateMerge).toContain(boundWorktree);
+    expect(page).toContain('for (let attempt = 0; attempt < 3; attempt += 1)');
+    expect(page).toContain("errorMessage(lastFailure, 'The Hermes session could not be bound to its worktree.')");
   });
 });
