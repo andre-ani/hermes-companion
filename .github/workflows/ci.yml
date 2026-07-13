@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - name: Electron UAT (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run electron:uat --workspace=@hermes-companion/desktop
+      - name: Electron UAT (macOS and Windows)
+        if: runner.os != 'Linux'
+        run: npm run electron:uat --workspace=@hermes-companion/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-uat-${{ runner.os }}
+          path: apps/desktop/uat-artifacts/**
+          if-no-files-found: error
+          retention-days: 14
+
+  bridge-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/bridge/Dockerfile
+          push: false
+          load: true
+          tags: hermes-companion-bridge:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Authenticated bridge container UAT
+        env:
+          BRIDGE_UAT_IMAGE: hermes-companion-bridge:ci
+          BRIDGE_UAT_SKIP_BUILD: '1'
+        run: npm run container:uat --workspace=@hermes-companion/bridge

@@ -1,0 +1,15 @@
+{
+  "name": "@hermes-companion/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx watch src/server.ts", "build": "tsc", "check": "tsc --noEmit", "start": "node dist/server.js", "container:uat": "node scripts/container-uat.mjs" },
+  "dependencies": {
+    "@hermes-companion/contracts": "*",
+    "http-proxy": "^1.18.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.19.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": { "@types/http-proxy": "^1.17.16", "@types/node": "^22.10.2", "@types/ws": "^8.18.1", "tsx": "^4.21.0", "typescript": "^5.9.3" }
+}

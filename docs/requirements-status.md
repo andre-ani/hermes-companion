@@ -1,0 +1,27 @@
+# Daily-driver evidence ledger
+
+This is an evidence ledger, not a second product goal. The authoritative scope,
+ordering, cut line, and stop condition are in [`active-goal.md`](active-goal.md).
+Evidence listed here proves only the named workflow and platform.
+
+| Release family | Current evidence | Remaining release evidence |
+| --- | --- | --- |
+| macOS Electron foundation | Adapter-node loopback renderer, authenticated native RPC, hardened preload, encrypted credential storage, error route, tests, production build, and isolated Electron rendering pass. The shell reloads legacy persisted preferences after retired direct-provider fields are stripped. | Packaged macOS restart and sleep/wake pass. Windows, Linux, signing, and publication are outside this goal. |
+| Lean Hermes runtime | Railway runs one pinned unmodified Hermes Agent image, native `hermes serve`, private gateway/cron, and one persistent Hermes volume. Hermes Workspace, Companion bridge, proxy, second runtime, and derived image are absent. The dormant direct AI SDK turn manager and parallel session store were removed from code, schema, dependencies, tests, and docs. | Forced public Serve outage/reconnect pass. |
+| Sessions and chat | Real create/resume/search/rename/archive/restore/delete, pin/unread, streamed text/reasoning/tools/approvals, native text/image attachments, and history recovery have live evidence. A stop race was fixed by recording cancellation intent before Hermes acknowledges `session.interrupt`; visible Stop now ends normally, a follow-up persisted `RESUME_AFTER_STOP_OK`, reload recovered it without overflow, and the disposable session was deleted through visible controls. Active and archived pages are fetched independently. | Sleep/wake, forced gateway loss, forced unavailable-history recovery, and packaged-app repetition. Fork is intentionally deferred because the lean public Serve contract does not expose it. |
+| Profiles, models, and status | Native Hermes Agent and Hermes Code profile switching passed in Electron. Agent selects Gemini 3.5 Flash; Code selects Claude Fable 5. A cross-profile center-pane fallback leak was fixed: a profile with no owned chat now lands on New chat while the global tree may still show clearly labeled sessions. Manual → Smart approval mode survived reload and was restored. Gateway shows the verified enhanced state. The Agents button opens real `delegation.status` data in the right dock. OpenRouter inventory/policy is read-only and concrete restricted models remain disabled. | Packaged credential reauthentication, a live approval request/response, populated subagent constrained-width pass, and any context-usage pass for a session where Hermes returns valid bounds. Resolved routed-model identity remains unavailable because Serve does not emit it. |
+| Projects and ordinary worktrees | Native Hermes project create/rename/archive/restore/delete, authoritative tree hydration, ordinary linked-worktree create/session/remove, main-checkout protection, and cleanup have prior live Railway/Electron evidence. | Recheck the complete ordinary loop in the packaged release candidate. Stacked/parent-linked worktrees and unusual conflict flows are outside this goal. |
+| Terminal and files | Worktree-bound PTY lifecycle and confined file list/read/edit/search/create/move/delete have deterministic tests and prior native Electron UAT, including shell cwd, editor save, and Git visibility. | Repeat terminal, file edit, reload, and session-isolation flow against the release candidate. |
+| Changes, Git, and PR | Native Hermes working-tree/branch status, lazy diffs, stage/unstage, and commit have prior live evidence. The right dock owns review UI; there is no center-pane duplicate. | Live revert confirmation, push, and draft-PR pass, then release-candidate repetition. Truthful per-turn baselines remain absent because Hermes does not persist a turn base SHA. |
+| Browser and preview | Isolated Electron browser sessions, safe navigation, full-screen layout, bridge authorization primitives, and compact right-dock ownership have deterministic evidence. | Prove one real project preview/reload/session-restoration flow. Advanced annotation, screenshot automation, favorites/history, and DevTools parity are outside this goal. |
+| Shell and overlays | Pane controls remain reachable, profile/model/session menus are anchored, session context actions are real, status uses JetBrains Mono, and current Electron probes show no document overflow or alert. The unsupported Fork action and parity-only Capabilities/settings surfaces were removed. | One deliberate normal/constrained/reduced-motion polish pass covering all qualified workflows. |
+| Build gates | Current full suite: 32 files and 163 tests passed; Svelte check reports 0 errors and 0 warnings; bridge TypeScript check passes; desktop and bridge production builds pass. | Security/release checks and packaged macOS UAT after remaining workflow fixes. |
+
+## Explicitly non-blocking
+
+Pets, achievements, journeys, Kanban parity, voice/TTS, plugin management,
+analytics/Insights parity, checkpoint administration, advanced browser tooling,
+Design Mode, exhaustive webhook/update/backup parity, unusual worktree topology,
+cross-platform qualification, signing, and public distribution do not block this
+release. Existing code for a deferred family is not evidence that it belongs in
+primary navigation or startup work.
