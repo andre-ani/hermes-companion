@@ -21,7 +21,8 @@ describe('native Hermes Git review architecture', () => {
     expect(remote).toContain("'/api/git/review/create-pr'");
     expect(remote).toContain('`/api/git/worktrees?path=');
     expect(remote).toContain('The selected checkout is not an active worktree in this Hermes project.');
-    expect(review).toContain('getHermesGitReview({ ...workspace, scope: reviewScope })');
+    expect(review).toContain('getHermesGitReview({ ...requestWorkspace, scope: requestScope })');
+    expect(review).toContain('requestGeneration !== reviewRequestGeneration || requestKey !== reviewKey');
     expect(remote).toContain("HermesReviewScope.default('uncommitted')");
     expect(review).toContain("<Select.Item value=\"branch\" label=\"Branch changes\">Branch changes</Select.Item>");
     expect(review).toContain('await reviewQuery.refresh()');

@@ -231,6 +231,8 @@ describe('shell resilience', () => {
     expect(page).toContain('data-shell-presented={shellPresented}');
     expect(page).toContain("visibility: ${shellPresented ? 'visible' : 'hidden'};");
     expect(page).toContain('class="shell-boot"');
+    expect(page).toContain('void tick().then(() => { if (!cancelled) shellPresented = true; });');
+    expect(page).not.toContain('requestAnimationFrame(() => { shellPresented = true; })');
   });
 
   it('treats the command palette as a deep-link search surface with a prompt fallback', async () => {

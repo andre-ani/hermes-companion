@@ -166,4 +166,34 @@ describe('Hermes chat streaming architecture', () => {
     expect(page).toContain('bindHermesProjectWorktree');
     expect(page).toContain('project={activeComposerProjectContext}');
   });
+
+  it('keeps dock worktree identity root-owned', async () => {
+    const [page, dock] = await Promise.all([
+      source('routes/+page.svelte'),
+      source('lib/components/companion/workspace-dock.svelte')
+    ]);
+
+    expect(page.includes('<WorkspaceDock worktree={activeWorktree}')).toBe(true);
+    expect(page.includes('<WorkspaceDock worktrees=')).toBe(false);
+    expect(dock.includes('activeThreadId')).toBe(false);
+    expect(dock.includes('worktrees.find((item) => item.threadId')).toBe(false);
+  });
+
+  it('merges a successful worktree bind before background overview refresh', async () => {
+    const page = await source('routes/+page.svelte');
+
+    const binding = /const\s+(\w+)\s*=\s*await resolveRemoteResult\(bindHermesProjectWorktree\(/.exec(page);
+    expect(binding).not.toBeNull();
+    const boundWorktree = binding?.[1] ?? 'boundWorktree';
+    const bindingStart = binding?.index ?? -1;
+    const refreshStart = page.indexOf('await refreshWorkspaceOverview()', bindingStart);
+    const overviewMergeStart = page.indexOf('overview =', bindingStart);
+
+    expect(refreshStart).toBeGreaterThan(bindingStart);
+    expect(overviewMergeStart).toBeGreaterThan(bindingStart);
+    expect(overviewMergeStart).toBeLessThan(refreshStart);
+    const immediateMerge = page.slice(overviewMergeStart, refreshStart);
+    expect(immediateMerge).toContain('worktrees:');
+    expect(immediateMerge).toContain(boundWorktree);
+  });
 });

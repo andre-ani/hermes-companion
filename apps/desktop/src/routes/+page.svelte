@@ -243,8 +243,11 @@
   // shell. Never expose shell children while their tracks are still resolving.
   $effect(() => {
     if (workspaceStarting || shellPresented) return;
-    const frame = requestAnimationFrame(() => { shellPresented = true; });
-    return () => cancelAnimationFrame(frame);
+    let cancelled = false;
+    // Electron may suspend animation frames while a window is backgrounded.
+    // A visual transition must never become a prerequisite for app readiness.
+    void tick().then(() => { if (!cancelled) shellPresented = true; });
+    return () => { cancelled = true; };
   });
 
   $effect(() => {
@@ -408,7 +411,16 @@
         activeSessionId = snapshot.sessionId;
         if (pendingWorktreeBinding) {
           try {
-            await resolveRemoteResult(bindHermesProjectWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId }));
+            const boundWorktree = await resolveRemoteResult(bindHermesProjectWorktree({ ...pendingWorktreeBinding, sessionId: snapshot.sessionId }));
+            if (overview) {
+              overview = {
+                ...overview,
+                worktrees: [
+                  boundWorktree,
+                  ...overview.worktrees.filter((item) => item.worktreeId !== boundWorktree.worktreeId && !(item.projectId === boundWorktree.projectId && item.threadId === boundWorktree.threadId))
+                ]
+              };
+            }
             await refreshWorkspaceOverview();
           } catch (cause) {
             error = cause instanceof Error ? cause.message : 'The Hermes session could not be bound to its worktree.';
@@ -962,7 +974,7 @@
           {/if}
         </section>
       <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktrees={overview?.worktrees ?? []} activeThreadId={activeSessionId} gitWorkspace={activeGitWorkspace} bind:dockTab bind:openTabs={dockTabs} onchanged={loadWorkspace} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} bind:dockTab bind:openTabs={dockTabs} onchanged={loadWorkspace} onfullscreenchange={(value) => (fullscreenPreview = value)} /></aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">

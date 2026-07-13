@@ -25,8 +25,7 @@
 
   type AnnotationTask = { id: string; route: string; note: string; taskStatus: 'queued' | 'starting' | 'running' | 'completed' | 'cancelled' | 'failed'; runId: string | null; lastEventSequence: number };
 
-  let { worktrees, activeThreadId, gitWorkspace = null, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktrees: WorktreeRecord[]; activeThreadId: string | null; gitWorkspace?: HermesGitWorkspace | null; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean) => void; dockTab?: string; openTabs?: string[] } = $props();
-  const worktree = $derived(worktrees.find((item) => item.threadId === activeThreadId) ?? null);
+  let { worktree = null, gitWorkspace = null, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean) => void; dockTab?: string; openTabs?: string[] } = $props();
   const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : 'Files';
   const surfaceOptions = [{ id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
   let tabMenuOpen = $state(false);
@@ -45,6 +44,7 @@
   let fileActionEntry = $state<FileEntry | null>(null);
   let fileActionPath = $state('');
   let filesPending = $state(false);
+  let fileRequestGeneration = 0;
   let error = $state('');
   let loadedWorktreeId = $state<string | null>(null);
   let previews = $state<PreviewLease[]>([]);
@@ -70,6 +70,8 @@
   $effect(() => {
     const id = worktree?.worktreeId ?? null;
     if (id === loadedWorktreeId) return;
+    fileRequestGeneration += 1;
+    filesPending = false;
     loadedWorktreeId = id; currentPath = ''; selectedFile = null; selectedPreview = null; fileDraft = ''; fileSearch = ''; searchResults = []; fileNotice = ''; entries = []; annotations = []; annotationEvents = {}; error = ''; previewSetupOpen = false;
     if (annotationTaskTimer) clearTimeout(annotationTaskTimer); annotationTaskTimer = null;
     if (id) { void loadFiles(''); void loadPreviews(); void loadAnnotations(); }
@@ -78,24 +80,40 @@
 
 
   async function loadFiles(path: string) {
-    if (!worktree || filesPending) return;
+    if (!worktree) return;
+    const worktreeId = worktree.worktreeId;
+    const generation = ++fileRequestGeneration;
     filesPending = true; error = '';
-    try { entries = await resolveRemoteResult(listWorktreeFiles({ worktreeId: worktree.worktreeId, path })); currentPath = path; selectedFile = null; selectedPreview = null; fileDraft = ''; fileNotice = ''; }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Files could not be listed.'; }
-    finally { filesPending = false; }
+    try {
+      const nextEntries = await resolveRemoteResult(listWorktreeFiles({ worktreeId, path }));
+      if (generation !== fileRequestGeneration || worktree?.worktreeId !== worktreeId) return;
+      entries = nextEntries; currentPath = path; selectedFile = null; selectedPreview = null; fileDraft = ''; fileNotice = '';
+    }
+    catch (cause) { if (generation === fileRequestGeneration && worktree?.worktreeId === worktreeId) error = cause instanceof Error ? cause.message : 'Files could not be listed.'; }
+    finally { if (generation === fileRequestGeneration) filesPending = false; }
   }
 
   async function openEntry(entry: FileEntry) {
     if (!worktree) return;
     if (entry.kind === 'directory') return loadFiles(entry.path);
+    const worktreeId = worktree.worktreeId;
+    const generation = ++fileRequestGeneration;
     filesPending = true; error = '';
     try {
-      if (/\.(png|jpe?g|gif|webp|pdf)$/i.test(entry.path)) { selectedPreview = await resolveRemoteResult(previewWorktreeFile({ worktreeId: worktree.worktreeId, path: entry.path })); selectedFile = null; }
-      else { selectedFile = await resolveRemoteResult(readWorktreeFile({ worktreeId: worktree.worktreeId, path: entry.path })); selectedPreview = null; fileDraft = selectedFile.content; }
+      if (/\.(png|jpe?g|gif|webp|pdf)$/i.test(entry.path)) {
+        const nextPreview = await resolveRemoteResult(previewWorktreeFile({ worktreeId, path: entry.path }));
+        if (generation !== fileRequestGeneration || worktree?.worktreeId !== worktreeId) return;
+        selectedPreview = nextPreview; selectedFile = null;
+      }
+      else {
+        const nextFile = await resolveRemoteResult(readWorktreeFile({ worktreeId, path: entry.path }));
+        if (generation !== fileRequestGeneration || worktree?.worktreeId !== worktreeId) return;
+        selectedFile = nextFile; selectedPreview = null; fileDraft = nextFile.content;
+      }
       fileNotice = '';
     }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'File could not be read.'; }
-    finally { filesPending = false; }
+    catch (cause) { if (generation === fileRequestGeneration && worktree?.worktreeId === worktreeId) error = cause instanceof Error ? cause.message : 'File could not be read.'; }
+    finally { if (generation === fileRequestGeneration) filesPending = false; }
   }
 
   async function saveFile() {
@@ -110,10 +128,15 @@
 
   async function searchFiles() {
     if (!worktree || !fileSearch.trim() || filesPending) return;
+    const worktreeId = worktree.worktreeId;
+    const generation = ++fileRequestGeneration;
     filesPending = true; error = ''; fileNotice = '';
-    try { searchResults = await resolveRemoteResult(searchWorktreeFiles({ worktreeId: worktree.worktreeId, query: fileSearch, limit: 200 })); }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Files could not be searched.'; }
-    finally { filesPending = false; }
+    try {
+      const nextResults = await resolveRemoteResult(searchWorktreeFiles({ worktreeId, query: fileSearch, limit: 200 }));
+      if (generation === fileRequestGeneration && worktree?.worktreeId === worktreeId) searchResults = nextResults;
+    }
+    catch (cause) { if (generation === fileRequestGeneration && worktree?.worktreeId === worktreeId) error = cause instanceof Error ? cause.message : 'Files could not be searched.'; }
+    finally { if (generation === fileRequestGeneration) filesPending = false; }
   }
 
   async function openSearchResult(result: FileSearchResult) {

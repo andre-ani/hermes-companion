@@ -40,6 +40,8 @@
   let pushAfterCommit = $state(false);
   let revertOpen = $state(false);
   let loadedReviewKey = $state('');
+  let reviewRequestGeneration = 0;
+  let diffRequestGeneration = 0;
 
   const workspaceKey = $derived(workspace ? `${workspace.projectId}:${workspace.path}` : '');
   const reviewKey = $derived(`${workspaceKey}:${reviewScope}`);
@@ -54,6 +56,9 @@
   $effect(() => {
     if (reviewKey === loadedReviewKey) return;
     loadedReviewKey = reviewKey;
+    reviewRequestGeneration += 1;
+    diffRequestGeneration += 1;
+    loading = false; diffLoading = false;
     status = null; files = []; ship = { ghReady: false, pr: null }; selectedPath = null; diff = ''; error = ''; notice = ''; commitMessage = '';
     if (workspace) void refresh();
   });
@@ -66,33 +71,56 @@
   });
 
   async function refresh() {
-    if (!workspace || loading) return;
+    const requestWorkspace = workspace;
+    const requestScope = reviewScope;
+    const requestKey = reviewKey;
+    if (!requestWorkspace) return;
+    const requestGeneration = ++reviewRequestGeneration;
     loading = true; error = '';
     try {
-      const reviewQuery = getHermesGitReview({ ...workspace, scope: reviewScope });
+      const reviewQuery = getHermesGitReview({ ...requestWorkspace, scope: requestScope });
       await reviewQuery.refresh();
       const result = await resolveRemoteResult(reviewQuery);
+      if (requestGeneration !== reviewRequestGeneration || requestKey !== reviewKey) return;
       status = result.status;
       files = result.review.files;
       ship = result.ship;
       if (!visibleFiles.some((file) => file.path === selectedPath)) selectedPath = visibleFiles[0]?.path ?? null;
       await loadDiff();
     } catch (cause) {
+      if (requestGeneration !== reviewRequestGeneration || requestKey !== reviewKey) return;
       status = null; files = []; diff = '';
       error = cause instanceof Error ? cause.message : 'Hermes Git review is unavailable for this checkout.';
-    } finally { loading = false; }
+    } finally {
+      if (requestGeneration === reviewRequestGeneration) loading = false;
+    }
   }
 
   async function loadDiff(path = selectedPath) {
-    if (!workspace || !path || (reviewScope === 'uncommitted' && reviewTab === 'commit')) { diff = ''; return; }
+    const requestWorkspace = workspace;
+    const requestScope = reviewScope;
+    const requestTab = reviewTab;
+    if (!requestWorkspace || !path || (requestScope === 'uncommitted' && requestTab === 'commit')) {
+      diffRequestGeneration += 1; diffLoading = false; diff = ''; return;
+    }
+    const requestKey = `${requestWorkspace.projectId}:${requestWorkspace.path}:${requestScope}:${requestTab}:${path}`;
+    const requestGeneration = ++diffRequestGeneration;
     diffLoading = true; error = '';
     try {
-      const diffQuery = getHermesGitReviewDiff({ ...workspace, scope: reviewScope, file: path, staged: reviewScope === 'uncommitted' && reviewTab === 'staged' });
+      const diffQuery = getHermesGitReviewDiff({ ...requestWorkspace, scope: requestScope, file: path, staged: requestScope === 'uncommitted' && requestTab === 'staged' });
       await diffQuery.refresh();
       const result = await resolveRemoteResult(diffQuery);
-      if (path === selectedPath) diff = result.diff;
-    } catch (cause) { if (path === selectedPath) diff = ''; error = cause instanceof Error ? cause.message : 'The selected diff could not be loaded.'; }
-    finally { diffLoading = false; }
+      const currentKey = workspace ? `${workspace.projectId}:${workspace.path}:${reviewScope}:${reviewTab}:${path}` : '';
+      if (requestGeneration === diffRequestGeneration && requestKey === currentKey && path === selectedPath) diff = result.diff;
+    } catch (cause) {
+      const currentKey = workspace ? `${workspace.projectId}:${workspace.path}:${reviewScope}:${reviewTab}:${path}` : '';
+      if (requestGeneration === diffRequestGeneration && requestKey === currentKey && path === selectedPath) {
+        diff = '';
+        error = cause instanceof Error ? cause.message : 'The selected diff could not be loaded.';
+      }
+    } finally {
+      if (requestGeneration === diffRequestGeneration) diffLoading = false;
+    }
   }
 
   async function selectFile(file: HermesReviewFile) {
