@@ -1,10 +1,18 @@
+import type { CapabilityFamily } from '@hermes-companion/contracts';
+
 export type SettingsIcon = 'model' | 'chat' | 'appearance' | 'workspace' | 'safety' | 'memory' | 'notifications' | 'providers' | 'gateway' | 'keys' | 'archive' | 'about';
+
+export type SettingsAction =
+  | { kind: 'surface'; surface: CapabilityFamily }
+  | { kind: 'connection' };
 
 export type SettingsItem = {
   id: string;
   label: string;
   description: string;
   keywords?: string[];
+  action?: SettingsAction;
+  unavailableReason?: string;
 };
 
 export type SettingsSection = {
@@ -18,8 +26,8 @@ export type SettingsSection = {
 
 export const settingsSections: SettingsSection[] = [
   { id: 'model', label: 'Model', icon: 'model', description: 'Default and auxiliary models', group: 'primary', items: [
-    { id: 'default-model', label: 'Default model', description: 'Choose the model for new Hermes sessions.', keywords: ['provider', 'reasoning'] },
-    { id: 'auxiliary-models', label: 'Auxiliary models', description: 'Assign models for vision, search, compression, approvals, and title generation.', keywords: ['vision', 'curator', 'compression'] }
+    { id: 'default-model', label: 'Default model', description: 'Choose the model for new Hermes sessions.', keywords: ['provider', 'reasoning'], action: { kind: 'surface', surface: 'models' } },
+    { id: 'auxiliary-models', label: 'Auxiliary models', description: 'Assign models for vision, search, compression, approvals, and title generation.', keywords: ['vision', 'curator', 'compression'], action: { kind: 'surface', surface: 'models' } }
   ] },
   { id: 'chat', label: 'Chat', icon: 'chat', description: 'Conversation behavior', group: 'primary', items: [
     { id: 'personality', label: 'Personality', description: 'Default Hermes assistant style for new sessions.' },
@@ -34,16 +42,16 @@ export const settingsSections: SettingsSection[] = [
     { id: 'contextual-controls', label: 'Contextual controls', description: 'Choose whether approval and context appear in the composer, status line, or both.', keywords: ['approval', 'status bar', 'context', 'statusline'] }
   ] },
   { id: 'workspace', label: 'Workspace', icon: 'workspace', description: 'Projects, worktrees, and local execution', group: 'primary', items: [
-    { id: 'default-project', label: 'Default project behavior', description: 'Choose how project sessions create and reuse worktrees.' },
-    { id: 'custom-actions', label: 'Profile actions', description: 'Configure project-scoped commands shown in the center header.', keywords: ['test', 'run', 'preview'] }
+    { id: 'default-project', label: 'Default project behavior', description: 'Choose how project sessions create and reuse worktrees.', unavailableReason: 'Project defaults are not configurable in this release.' },
+    { id: 'custom-actions', label: 'Profile actions', description: 'Configure project-scoped commands shown in the center header.', keywords: ['test', 'run', 'preview'], unavailableReason: 'Profile action editing is not available in this release.' }
   ] },
   { id: 'safety', label: 'Safety', icon: 'safety', description: 'Approvals and execution boundaries', group: 'primary', items: [
-    { id: 'approval-mode', label: 'Approval mode', description: 'Control when Hermes asks before sensitive operations.', keywords: ['yolo', 'permissions'] },
-    { id: 'execution-policy', label: 'Execution policy', description: 'Review shell, filesystem, and network boundaries.' }
+    { id: 'approval-mode', label: 'Approval mode', description: 'Control when Hermes asks before sensitive operations.', keywords: ['yolo', 'permissions'], unavailableReason: 'Use the approval control in the status bar.' },
+    { id: 'execution-policy', label: 'Execution policy', description: 'Review shell, filesystem, and network boundaries.', action: { kind: 'surface', surface: 'permissions' } }
   ] },
   { id: 'memory-context', label: 'Memory & Context', icon: 'memory', description: 'Memory, context, and compression', group: 'primary', items: [
-    { id: 'memory', label: 'Memory', description: 'Configure durable memory and retrieval.' },
-    { id: 'context', label: 'Context management', description: 'Configure context budgets and compaction.', keywords: ['tokens', 'compression'] }
+    { id: 'memory', label: 'Memory', description: 'Configure durable memory and retrieval.', action: { kind: 'surface', surface: 'memory' } },
+    { id: 'context', label: 'Context management', description: 'Configure context budgets and compaction.', keywords: ['tokens', 'compression'], action: { kind: 'surface', surface: 'memory' } }
   ] },
   { id: 'notifications', label: 'Notifications', icon: 'notifications', description: 'System and in-app notifications', group: 'runtime', items: [
     { id: 'system-notifications', label: 'System notifications', description: 'Notify when an agent finishes or needs attention.' },
@@ -56,17 +64,17 @@ export const settingsSections: SettingsSection[] = [
     { id: 'openrouter-policy', label: 'Named guardrails', description: 'Inspect optional OpenRouter workspace guardrail definitions.', keywords: ['policy', 'privacy', 'allowed models', 'ignored providers', 'management key', 'zdr', 'budget'] }
   ] },
   { id: 'gateway', label: 'Gateway', icon: 'gateway', description: 'Hermes runtime connection', group: 'runtime', items: [
-    { id: 'gateway-connection', label: 'Gateway connection', description: 'Configure local or remote Hermes gateway endpoints.' },
-    { id: 'gateway-health', label: 'Gateway health', description: 'Inspect compatibility and restart the gateway.' },
-    { id: 'diagnostics', label: 'Diagnostics', description: 'Inspect runtime health, logs, and supported recovery actions.', keywords: ['logging', 'traces', 'doctor'] }
+    { id: 'gateway-connection', label: 'Gateway connection', description: 'Configure local or remote Hermes gateway endpoints.', action: { kind: 'connection' } },
+    { id: 'gateway-health', label: 'Gateway health', description: 'Inspect compatibility and restart the gateway.', action: { kind: 'surface', surface: 'health' } },
+    { id: 'diagnostics', label: 'Diagnostics', description: 'Inspect runtime health, logs, and supported recovery actions.', keywords: ['logging', 'traces', 'doctor'], action: { kind: 'surface', surface: 'health' } }
   ] },
   { id: 'tools-keys', label: 'Tools & Keys', icon: 'keys', description: 'Toolsets, MCP, and credentials', group: 'runtime', items: [
-    { id: 'tools', label: 'Tools', description: 'Configure Hermes toolsets and permissions.' },
-    { id: 'mcp', label: 'MCP servers', description: 'Manage Model Context Protocol connections.' },
-    { id: 'credentials', label: 'Credentials', description: 'Manage secrets available to Hermes.' }
+    { id: 'tools', label: 'Tools', description: 'Configure Hermes toolsets and permissions.', action: { kind: 'surface', surface: 'toolsets' } },
+    { id: 'mcp', label: 'MCP servers', description: 'Manage Model Context Protocol connections.', action: { kind: 'surface', surface: 'mcp' } },
+    { id: 'credentials', label: 'Credentials', description: 'Manage secrets available to Hermes.', action: { kind: 'surface', surface: 'credentials' } }
   ] },
   { id: 'archived-chats', label: 'Archived Chats', icon: 'archive', description: 'Archived conversation history', group: 'system', items: [
-    { id: 'archive', label: 'Archived sessions', description: 'Review, restore, or delete archived sessions.', keywords: ['history'] }
+    { id: 'archive', label: 'Archived sessions', description: 'Review, restore, or delete archived sessions.', keywords: ['history'], unavailableReason: 'Use the Archived filter in the session list.' }
   ] },
   { id: 'about', label: 'About', icon: 'about', description: 'Version and support information', group: 'system', items: [
     { id: 'account-identity', label: 'Account identity', description: 'Set the name and email shown in the persistent sidebar footer.', keywords: ['profile', 'avatar'] },

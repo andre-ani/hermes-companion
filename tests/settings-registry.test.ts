@@ -20,6 +20,17 @@ describe('settings registry', () => {
     expect(searchSettings('install plugin')).toEqual([]);
   });
 
+  it('routes every generic settings action explicitly or explains why it is unavailable', () => {
+    const genericSections = settingsSections.filter((section) => !['chat', 'appearance', 'notifications', 'providers', 'about'].includes(section.id));
+    for (const item of genericSections.flatMap((section) => section.items)) {
+      expect(Boolean(item.action) || Boolean(item.unavailableReason), item.id).toBe(true);
+    }
+    expect(settingsSections.find((section) => section.id === 'gateway')?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gateway-connection', action: { kind: 'connection' } }),
+      expect.objectContaining({ id: 'gateway-health', action: { kind: 'surface', surface: 'health' } })
+    ]));
+  });
+
   it('defaults profile thinking status to Hermes personality while accepting plain and hidden modes', () => {
     expect(ProfileUiPreferences.parse({}).thinkingStatus).toBe('personality');
     expect(ProfileUiPreferences.parse({ thinkingStatus: 'plain' }).thinkingStatus).toBe('plain');

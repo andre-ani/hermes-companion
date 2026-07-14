@@ -7,13 +7,14 @@
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import { settingsSections } from '$lib/settings/settings-registry';
+  import type { SettingsAction } from '$lib/settings/settings-registry';
   import { getOpenRouterPolicy, saveDesktopSettings, saveOpenRouterManagementKey } from '$lib/client/remote/settings.remote';
   import { setProfileUiPreferences } from '$lib/client/remote/profile-ui.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
-  import type { DesktopPreferences, OpenRouterPolicyOverview, ProfileControlDisplay, ProfileUiPreferences } from '@hermes-companion/contracts';
+  import type { CapabilityFamily, DesktopPreferences, OpenRouterPolicyOverview, ProfileControlDisplay, ProfileUiPreferences } from '@hermes-companion/contracts';
   import { Check, CircleAlert, ExternalLink, LoaderCircle, ShieldCheck } from '@lucide/svelte';
 
-  let { sectionId, itemId, preferences, profileConnectionId = null, profileUiPreferences = null, openRouterConfigured = false, openRouterVerified = false, openRouterVerificationError = null, openRouterPolicy = null, onsaved, onpolicysaved, onprofileuisaved, onopensurface }: {
+  let { sectionId, itemId, preferences, profileConnectionId = null, profileUiPreferences = null, openRouterConfigured = false, openRouterVerified = false, openRouterVerificationError = null, openRouterPolicy = null, availableSurfaces = [], connectionAvailable = false, onsaved, onpolicysaved, onprofileuisaved, onsettingsaction }: {
     sectionId: string;
     itemId?: string;
     preferences: DesktopPreferences;
@@ -23,10 +24,12 @@
     openRouterVerified?: boolean;
     openRouterVerificationError?: string | null;
     openRouterPolicy?: OpenRouterPolicyOverview | null;
+    availableSurfaces?: CapabilityFamily[];
+    connectionAvailable?: boolean;
     onsaved: (preferences: DesktopPreferences, configured: boolean, verified: boolean, verificationError: string | null) => void;
     onpolicysaved: (policy: OpenRouterPolicyOverview) => void;
     onprofileuisaved: (preferences: ProfileUiPreferences) => void;
-    onopensurface: (surface: string) => void;
+    onsettingsaction: (action: SettingsAction) => void;
   } = $props();
 
   let draft = $state<DesktopPreferences>({ account: { displayName: 'Hermes User', email: '' }, appearance: { mode: 'system', palette: 'mono', codeWordWrap: false, toolCallDensity: 'balanced' }, notifications: { system: true, warnings: true, completionSound: false } });
@@ -42,6 +45,8 @@
   let profileControlDraft = $state<{ approval: ProfileControlDisplay; context: ProfileControlDisplay }>({ approval: 'status', context: 'status' });
   let thinkingStatusDraft = $state<'plain' | 'personality' | 'hidden'>('personality');
   const section = $derived(settingsSections.find((entry) => entry.id === sectionId) ?? settingsSections[0]);
+  const sectionHasDesktopSettings = $derived(['appearance', 'notifications', 'about'].includes(section.id));
+  const actionAvailable = (action?: SettingsAction) => action?.kind === 'connection' ? connectionAvailable : action?.kind === 'surface' ? availableSurfaces.includes(action.surface) : false;
 
   $effect(() => {
     if (!initialized) {
@@ -113,7 +118,7 @@
 
 <div class="settings-scroll">
   <article class="settings-page" aria-labelledby="settings-heading">
-    <header class="settings-page-header"><div><h1 id="settings-heading">{section.label}</h1><p>{section.description}</p></div>{#if !['providers', 'chat'].includes(section.id)}<Button size="sm" onclick={() => void save()} disabled={saving}>{#if saving}<LoaderCircle data-icon="inline-start" class="spin" />{/if}Save</Button>{/if}</header>
+    <header class="settings-page-header"><div><h1 id="settings-heading">{section.label}</h1><p>{section.description}</p></div>{#if sectionHasDesktopSettings}<Button size="sm" onclick={() => void save()} disabled={saving}>{#if saving}<LoaderCircle data-icon="inline-start" class="spin" />{/if}Save</Button>{/if}</header>
     {#if feedback}<p class="settings-feedback" role="status"><Check />{feedback}</p>{/if}
     {#if failure}<Alert.Root variant="destructive"><CircleAlert /><Alert.Title>Settings action failed</Alert.Title><Alert.Description>{failure}</Alert.Description></Alert.Root>{/if}
 
@@ -145,7 +150,7 @@
       </Field.FieldGroup></section>
     {:else if section.id === 'providers'}
       <Alert.Root><ShieldCheck /><Alert.Title>Hermes remains the primary runtime</Alert.Title><Alert.Description>Provider policy is a read-only layer over Hermes. It can restrict choices but never becomes a second inference path.</Alert.Description></Alert.Root>
-      <section class="settings-group" aria-labelledby="hermes-provider-heading" id="setting-hermes-providers"><h2 id="hermes-provider-heading">Hermes providers</h2><div class="setting-row"><span><strong>Model provider accounts</strong><small>Authentication and default model selection remain owned by Hermes.</small></span><Button variant="outline" size="sm" onclick={() => onopensurface('models')}>Manage <ExternalLink data-icon="inline-end" /></Button></div></section>
+      <section class="settings-group" aria-labelledby="hermes-provider-heading" id="setting-hermes-providers"><h2 id="hermes-provider-heading">Hermes providers</h2><div class="setting-row"><span><strong>Model provider accounts</strong><small>Authentication and default model selection remain owned by Hermes.</small></span><Button variant="outline" size="sm" disabled={!availableSurfaces.includes('models')} onclick={() => onsettingsaction({ kind: 'surface', surface: 'models' })}>Manage <ExternalLink data-icon="inline-end" /></Button></div></section>
       <section class="settings-group" aria-labelledby="openrouter-heading" id="setting-openrouter"><h2 id="openrouter-heading">OpenRouter policy</h2><Field.FieldGroup>
         <Field.Field><Field.FieldLabel for="openrouter-key">Inference key</Field.FieldLabel><Input id="openrouter-key" type="password" bind:value={openRouterApiKey} oninput={() => { failure = ''; feedback = ''; }} placeholder={openRouterConfigured ? 'Stored securely — enter to replace' : 'sk-or-v1-…'} autocomplete="new-password" /><Field.FieldDescription>Read the effective model inventory and restrictions for the OpenRouter account used by Hermes. Companion never uses this key as a second chat runtime.</Field.FieldDescription></Field.Field>
         {#if openRouterConfigured}<Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Stored credential</Field.FieldTitle><Field.FieldDescription>Remove the encrypted OpenRouter key when these settings are saved.</Field.FieldDescription></Field.FieldContent><Switch bind:checked={clearOpenRouterApiKey} aria-label="Remove stored OpenRouter key" /></Field.Field>{/if}
@@ -165,7 +170,7 @@
       <section class="settings-group" aria-labelledby="about-heading" id="setting-version"><h2 id="about-heading">Hermes Companion</h2><div class="setting-row"><span><strong>Development build</strong><small>This owner-only build is qualified directly on macOS.</small></span></div></section>
     {:else}
       <section class="settings-group" aria-labelledby="section-options"><h2 id="section-options">{section.label}</h2>
-        {#each section.items as item (item.id)}<div class="setting-row" id={`setting-${item.id}`}><span><strong>{item.label}</strong><small>{item.description}</small></span><Button size="sm" variant="ghost" onclick={() => onopensurface(section.id)}>Configure</Button></div>{/each}
+        {#each section.items as item (item.id)}<div class="setting-row" id={`setting-${item.id}`}><span><strong>{item.label}</strong><small>{item.description}</small></span><Button size="sm" variant="ghost" disabled={!actionAvailable(item.action)} title={item.unavailableReason ?? undefined} onclick={() => item.action && onsettingsaction(item.action)}>{item.action ? 'Configure' : 'Unavailable'}</Button></div>{/each}
       </section>
     {/if}
   </article>

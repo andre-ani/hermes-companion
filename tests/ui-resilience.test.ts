@@ -57,6 +57,14 @@ describe('shell resilience', () => {
     expect(page).not.toContain("chooseSurface('updates')");
     expect(page).not.toContain("runCommandCenterAction('update')");
     expect(page).not.toContain('Hermes API</Button>');
+    expect(settings).not.toContain('onopensurface(section.id)');
+    expect(page).not.toContain("supported ?? (surface === 'model' ? 'models' : 'profiles')");
+  });
+
+  it('namespaces sidebar disclosure state from dependency-wide expanded selectors', async () => {
+    const sidebarCategory = await source('lib/components/companion/sidebar-category.svelte');
+    expect(sidebarCategory).toContain('data-category-expanded={expanded}');
+    expect(sidebarCategory).not.toContain('data-expanded={expanded}');
   });
 
   it('keeps both pane restoration controls in viewport chrome', async () => {

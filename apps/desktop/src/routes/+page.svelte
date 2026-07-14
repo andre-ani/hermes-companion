@@ -42,6 +42,7 @@
   import { adoptWorkspaceLayout, getWorkspaceLayout, setWorkspaceLayout } from '$lib/client/remote/workspace-layout.remote';
   import { clearWorkspaceLayoutJournal, readWorkspaceLayoutJournal, writeWorkspaceLayoutJournal } from '$lib/client/workspace-layout-journal';
   import { settingsSections } from '$lib/settings/settings-registry';
+  import type { SettingsAction } from '$lib/settings/settings-registry';
   import { modelSelectionKey } from '$lib/model-identity';
   import { applyOpenRouterPolicy } from '$lib/openrouter-policy';
   import { errorMessage } from '$lib/error-message';
@@ -1252,9 +1253,10 @@
     document.documentElement.classList.toggle('dark', preferences.appearance.mode === 'dark');
   }
 
-  function openSettingsSurface(surface: string) {
-    const supported = overview?.capabilities.find((capability) => capability.family === surface && capability.available)?.family;
-    chooseSurface(supported ?? (surface === 'model' ? 'models' : 'profiles'));
+  function openSettingsAction(action: SettingsAction) {
+    if (action.kind === 'connection') { connectOpen = true; return; }
+    if (!capabilityFor(action.surface)?.available) return;
+    chooseSurface(action.surface);
   }
 
   function rememberInspectorState() {
@@ -1663,7 +1665,8 @@
         <section class="primary-pane" aria-label={settingsActive ? 'Settings' : workspaceIsProjectScoped ? 'Project workspace' : 'Conversation'} aria-hidden={inspectorVisible && inspectorMode === 'focused'} inert={inspectorVisible && inspectorMode === 'focused'}>
           {#if settingsActive}
             <SettingsPage sectionId={activeSettingsSection} itemId={activeSettingsItem} preferences={desktopPreferences} profileConnectionId={overview?.gateway.connection.id ?? null} {profileUiPreferences} {openRouterConfigured} {openRouterVerified} {openRouterVerificationError} {openRouterPolicy}
-              onsaved={(preferences, configured, verified, verificationError) => { desktopPreferences = preferences; openRouterConfigured = configured; openRouterVerified = verified; openRouterVerificationError = verificationError; applyDesktopAppearance(preferences); }} onpolicysaved={(policy) => { openRouterPolicy = policy; }} onprofileuisaved={(preferences) => { profileUiPreferences = preferences; sessionPresentation = preferences.sessionPresentation; }} onopensurface={openSettingsSurface} />
+              availableSurfaces={overview?.capabilities.filter((capability) => capability.available).map((capability) => capability.family) ?? []} connectionAvailable={Boolean(overview?.gateway.connection)}
+              onsaved={(preferences, configured, verified, verificationError) => { desktopPreferences = preferences; openRouterConfigured = configured; openRouterVerified = verified; openRouterVerificationError = verificationError; applyDesktopAppearance(preferences); }} onpolicysaved={(policy) => { openRouterPolicy = policy; }} onprofileuisaved={(preferences) => { profileUiPreferences = preferences; sessionPresentation = preferences.sessionPresentation; }} onsettingsaction={openSettingsAction} />
           {:else}
           <header class="workspace-header">
             <div class="header-context"><strong>{activeSurface ?? activeSession?.title ?? (workspaceIsProjectScoped ? 'Project session' : 'New conversation')}</strong><span class="context-meta">{activeSurface ? 'Hermes capability' : workspaceIsProjectScoped ? activeProject?.name ?? 'Project' : activeProfile?.name ?? 'Hermes Agent'}</span>{#if !activeSurface && activeWorktree}<Badge variant="outline">{activeWorktree.branch}</Badge>{/if}</div>

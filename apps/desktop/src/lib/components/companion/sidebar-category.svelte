@@ -23,7 +23,7 @@
   const contentId = $derived(`${id}-category-content`);
 </script>
 
-<section class="sidebar-category" data-expanded={expanded}>
+<section class="sidebar-category" data-category-expanded={expanded}>
   <header class="category-row">
     <button type="button" class="category-disclosure" aria-expanded={expanded} aria-controls={contentId} onclick={ontoggle}>
       <span class="category-title">{label}</span>
@@ -32,7 +32,7 @@
     </button>
     {#if controls}<div class="category-controls">{@render controls()}</div>{/if}
   </header>
-  <div id={contentId} class="category-content" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded || undefined}>
+  <div id={contentId} class="category-content" data-category-expanded={expanded} aria-hidden={!expanded} inert={!expanded || undefined}>
     <div>{@render children()}</div>
   </div>
 </section>
@@ -46,9 +46,9 @@
   .category-count { flex: none; color: var(--muted-foreground); font-family: var(--font-ui); font-size: var(--type-caption); font-variant-numeric: tabular-nums; }
   :global(.category-chevron) { inline-size: .72rem; block-size: .72rem; flex: none; opacity: 0; transform: rotate(0deg); transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
   .category-row:hover :global(.category-chevron), .category-row:focus-within :global(.category-chevron) { opacity: 1; }
-  .sidebar-category[data-expanded='false'] :global(.category-chevron) { transform: rotate(-90deg); }
+  .sidebar-category[data-category-expanded='false'] :global(.category-chevron) { transform: rotate(-90deg); }
   .category-controls { flex: none; display: flex; align-items: center; gap: .05rem; }
   .category-content { min-block-size: 0; display: grid; grid-template-rows: minmax(0, 1fr); opacity: 1; transition: grid-template-rows var(--motion-layout) var(--ease-standard), opacity var(--motion-enter) var(--ease-standard); }
-  .category-content[data-expanded='false'] { grid-template-rows: minmax(0, 0fr); opacity: 0; }
+  .category-content[data-category-expanded='false'] { grid-template-rows: minmax(0, 0fr); opacity: 0; }
   .category-content > div { min-block-size: 0; overflow: hidden; }
 </style>
