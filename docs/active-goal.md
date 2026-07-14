@@ -1,7 +1,8 @@
-# Active goal: prove the thin upstream-aligned chat path
+# Accepted goal: thin upstream-aligned chat recovery
 
-This is the only active completion target. Ordinary coding-loop completion and
-shared polish resume only after this architecture gate passes.
+This architecture gate passed in the packaged macOS application against the
+pinned live Railway service. Review is now required before any follow-on
+subtraction begins.
 
 ## Observable release gate
 
@@ -42,11 +43,20 @@ old path do not satisfy this gate.
 - pinned-contract gaps degrade truthfully and are registered as shims;
 - architecture violation baselines only shrink.
 
-## Stop condition
+## Result and stop condition
 
-Stop this slice when focused/full checks and the packaged live workflow pass,
-the old chat path is deleted, and a clean rollback commit exists. Then review
-the result before migrating Code mode or workspace ownership.
+- The old chat control plane is deleted.
+- Focused architecture, recovery, type, and packaged build checks pass.
+- The live workflow restored the same durable session after renderer reload,
+  network interruption, and process relaunch.
+- Exactly one user message, tool invocation/result, and final response were
+  observed, with no credential or ticket exposure.
+- `e0a9603` is the clean post-gate rollback checkpoint containing the tested
+  single-instance ownership fix.
+
+Stop here for review. Do not migrate Code mode, repository ownership, or the
+original dirty worktree changes until the next direction is approved.
 
 The packaged operator workflow is `npm run acceptance:live-railway-chat`; its
-sanitized report is intentionally ignored under `acceptance-artifacts/`.
+sanitized passing report is intentionally ignored under
+`acceptance-artifacts/`. See `current-checkpoint.md` for its provenance note.
