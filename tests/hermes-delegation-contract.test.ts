@@ -39,6 +39,6 @@ describe('Hermes delegation contract', () => {
     expect(source).toContain('role="treeitem"');
     expect(source).toContain('aria-level={row.depth + 1}');
     expect(source).toContain('<dt>Parent</dt>');
-    expect(source).toContain('Max depth');
+    expect(source).toContain('Maximum spawn depth');
   });
 });

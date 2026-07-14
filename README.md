@@ -1,22 +1,35 @@
 # Hermes Companion
 
+> [!WARNING]
+> **This project is not production ready.** Development has been wrapped up and
+> the repository is preserved as an experimental reference. It contains known
+> rough edges, incomplete and under-tested flows, and likely additional issues.
+
 Hermes Companion is an experimental macOS Electron client for
 [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent).
 It keeps Hermes as the agent runtime and adds a profile-led desktop shell for
 conversations, projects, worktrees, terminals, files, diffs, and previews.
 
-This is a vibe-coded weekend project. It is being built in public because the
-ideas and implementation may be useful to other people, not because it is a
-finished or supported product. Expect rough edges, incomplete flows, breaking
-changes, and some unusually ambitious UI work for a personal prototype.
+This was a vibe-coded weekend project. It is public because the ideas and
+implementation may be useful to other people, not because it is a finished or
+supported product. If you are looking for a SvelteKit and Electron starting
+point for a Hermes-style desktop client, take whatever is useful here and treat
+the rest as prototype code.
 
 ## Status
 
-Hermes Companion is pre-release software under active development. The current
-goal is a stable personal daily driver on macOS—not complete Hermes Desktop,
-IDE, or cross-platform parity. Synthetic demo records are intentionally
-avoided: visible sessions and capabilities should come from real Hermes or
-Companion-owned state.
+Hermes Companion is a concluded prototype, not a release candidate or an
+actively supported application. In hindsight, SvelteKit was probably not the
+most efficient choice for this experiment: many relevant examples and UI
+patterns were React-first, and porting their behavior consumed time that would
+otherwise have gone into testing and stabilization. The result is broad and
+interesting, but it has many issues and has not received production-level
+qualification.
+
+The repository may still be useful for its SvelteKit/Electron shell, Hermes
+integration boundaries, worktree and terminal bridges, multi-pane layout,
+settings patterns, and experiments in adapting React-oriented AI interface
+ideas without shipping React in the product.
 
 Do not depend on this repository for production workloads or sensitive data.
 There are no hosted binaries, support guarantees, migration promises, or

@@ -8,6 +8,7 @@
   let { activeSection, onselect, onback }: { activeSection: string; onselect: (sectionId: string, itemId?: string) => void; onback: () => void } = $props();
   let query = $state('');
   const results = $derived(searchSettings(query));
+  const groups = [{ id: 'primary', label: 'App' }, { id: 'runtime', label: 'Hermes' }, { id: 'system', label: 'System' }] as const;
   const iconMap = { model: Box, chat: MessageCircle, appearance: Palette, workspace: Monitor, safety: LockKeyhole, memory: Brain, notifications: Bell, providers: Cpu, gateway: RadioTower, keys: KeyRound, archive: Archive, about: CircleHelp } satisfies Record<SettingsIcon, typeof Bot>;
 </script>
 
@@ -29,15 +30,16 @@
         {/each}
       {:else}<p class="settings-empty">No matching settings.</p>{/if}
     {:else}
-      {#each ['primary', 'runtime', 'system'] as group}
-        <div class="settings-group">
-          {#each settingsSections.filter((section) => (section.group ?? 'primary') === group) as section (section.id)}
+      {#each groups as group}
+        <section class="settings-group" aria-labelledby={`settings-group-${group.id}`}>
+          <h2 id={`settings-group-${group.id}`}>{group.label}</h2>
+          {#each settingsSections.filter((section) => (section.group ?? 'primary') === group.id) as section (section.id)}
             {@const Icon = iconMap[section.icon] ?? Settings2}
             <button type="button" class:active={activeSection === section.id} onclick={() => onselect(section.id)} aria-current={activeSection === section.id ? 'page' : undefined}>
               <Icon aria-hidden="true" /><span>{section.label}</span>
             </button>
           {/each}
-        </div>
+        </section>
       {/each}
     {/if}
   </nav>
@@ -52,10 +54,11 @@
   .settings-nav { min-block-size: 0; display: flex; flex: 1; flex-direction: column; gap: .55rem; overflow-y: auto; padding-block: .1rem .5rem; }
   .settings-group { display: grid; gap: 1px; }
   .settings-group + .settings-group { padding-block-start: .45rem; }
+  .settings-group h2 { margin: 0; padding: .3rem .45rem .2rem; color: var(--muted-foreground); font-size: var(--type-caption); font-weight: 560; }
   .settings-nav button { min-inline-size: 0; inline-size: 100%; min-block-size: 2rem; display: grid; grid-template-columns: 1.15rem minmax(0, 1fr); align-items: center; gap: .45rem; border: 0; border-radius: calc(var(--radius) * .65); background: transparent; padding: .32rem .45rem; color: var(--muted-foreground); text-align: start; cursor: pointer; }
   .settings-nav button:hover, .settings-nav button:focus-visible, .settings-nav button.active { background: var(--sidebar-accent); color: var(--foreground); }
   .settings-nav button :global(svg) { inline-size: .9rem; }
-  .settings-nav button span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-ui); font-size: .7rem; }
+  .settings-nav button span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-ui); font-size: var(--type-small); }
   .settings-result { align-items: start !important; }
   .settings-result span { display: grid; gap: .08rem; white-space: normal !important; }
   .settings-result strong, .settings-result small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

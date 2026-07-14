@@ -92,7 +92,7 @@
 	>
 		<img
 			alt={data.filename || "attachment"}
-			class="size-full rounded-md object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+			class="size-full rounded-md object-cover transition-transform [transition-duration:var(--motion-fast)] group-hover:scale-[1.03]"
 			height={56}
 			onload={handleImageLoad}
 			src={getDisplayUrl(data)}

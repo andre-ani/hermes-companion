@@ -804,6 +804,68 @@ async function runAutomatedUat(window) {
       : null;
     checks.browserDock = openedBrowserTab && openedBrowserUrl && uiBrowserSecurity?.node === 'undefined' && uiBrowserSecurity?.companion === 'undefined';
     checks.browserReactivation = switchedBrowserAway && switchedBrowserBack && browserAfterRapidReactivate?.url === browserFixtureUrl;
+    const openDockSurface = async (label) => {
+      const existing = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === ${JSON.stringify(label)}); tab?.click(); return Boolean(tab); })()`);
+      if (existing) return true;
+      const openedMenu = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="New tab"]'); button?.click(); return Boolean(button); })()`);
+      if (!openedMenu) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const selected = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[data-slot="command-item"]')].find((entry) => entry.textContent?.trim() === ${JSON.stringify(label)}); item?.click(); return Boolean(item); })()`);
+      if (!selected) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return window.webContents.executeJavaScript(`[...document.querySelectorAll('[data-slot="tabs-trigger"]')].some((item) => item.textContent?.trim() === ${JSON.stringify(label)})`);
+    };
+    const openedTerminalTab = await openDockSurface('Terminal');
+    const openedAgentsTab = await openDockSurface('Agents');
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('.agents-empty')) && Boolean(document.querySelector('.agents-limits'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    window.setSize(960, 680);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const adaptivePaneEvidence = await window.webContents.executeJavaScript(`(() => {
+      const rect = (node) => { if (!(node instanceof HTMLElement)) return null; const value = node.getBoundingClientRect(); return { left: value.left, right: value.right, top: value.top, bottom: value.bottom, width: value.width, height: value.height }; };
+      const list = document.querySelector('.dock-header [data-slot="tabs-list"]');
+      const tabs = [...(list?.querySelectorAll('[data-slot="tabs-trigger"]') ?? [])];
+      const listRect = rect(list);
+      if (list instanceof HTMLElement) list.scrollLeft = 0;
+      const firstAtStart = rect(tabs[0]);
+      const maxScroll = list instanceof HTMLElement ? Math.max(0, list.scrollWidth - list.clientWidth) : 0;
+      if (list instanceof HTMLElement) list.scrollLeft = maxScroll;
+      const lastAtEnd = rect(tabs.at(-1));
+      const add = rect(document.querySelector('.dock-add'));
+      const agents = rect(document.querySelector('.agents-dock'));
+      const agentsHeader = rect(document.querySelector('.agents-summary'));
+      const agentsEmpty = rect(document.querySelector('.agents-empty'));
+      const agentsFooter = rect(document.querySelector('.agents-limits'));
+      const terminal = rect(document.querySelector('.primary-layout > .terminal-split-region .terminal-split'));
+      const terminalHeader = rect(document.querySelector('.primary-layout > .terminal-split-region .terminal-header'));
+      const terminalEmpty = rect(document.querySelector('.primary-layout > .terminal-split-region .terminal-empty'));
+      const terminalFooter = rect(document.querySelector('.primary-layout > .terminal-split-region .terminal-tabs'));
+      const centered = (content, start, end) => Boolean(content && start && end && Math.abs(((content.top + content.bottom) / 2) - ((start + end) / 2)) <= 2);
+      return {
+        tabLabels: tabs.map((tab) => tab.textContent?.trim() ?? ''),
+        list: listRect,
+        scrollWidth: list instanceof HTMLElement ? list.scrollWidth : null,
+        clientWidth: list instanceof HTMLElement ? list.clientWidth : null,
+        maxScroll,
+        firstAtStart,
+        lastAtEnd,
+        add,
+        leadingTabReachable: Boolean(listRect && firstAtStart && firstAtStart.left >= listRect.left - 1 && firstAtStart.right <= listRect.right + 1),
+        trailingTabReachable: Boolean(listRect && lastAtEnd && lastAtEnd.left >= listRect.left - 1 && lastAtEnd.right <= listRect.right + 1),
+        addOutsideScrollOwner: Boolean(listRect && add && add.left >= listRect.right),
+        agents: { root: agents, header: agentsHeader, empty: agentsEmpty, footer: agentsFooter, bodyCentered: centered(agentsEmpty, agentsHeader?.bottom, agentsFooter?.top), footerAnchored: Boolean(agents && agentsFooter && Math.abs(agents.bottom - agentsFooter.bottom) <= 1) },
+        terminal: { root: terminal, header: terminalHeader, empty: terminalEmpty, footer: terminalFooter, bodyCentered: centered(terminalEmpty, terminalHeader?.bottom, terminalFooter?.top), footerAnchored: Boolean(terminal && terminalFooter && Math.abs(terminal.bottom - terminalFooter.bottom) <= 1) }
+      };
+    })()`);
+    checks.adaptivePaneLayout = openedTerminalTab && openedAgentsTab && adaptivePaneEvidence.tabLabels.includes('Files') && adaptivePaneEvidence.tabLabels.includes('Browser') && adaptivePaneEvidence.tabLabels.includes('Terminal') && adaptivePaneEvidence.tabLabels.includes('Agents') && adaptivePaneEvidence.maxScroll > 0 && adaptivePaneEvidence.leadingTabReachable && adaptivePaneEvidence.trailingTabReachable && adaptivePaneEvidence.addOutsideScrollOwner && adaptivePaneEvidence.agents.bodyCentered && adaptivePaneEvidence.agents.footerAnchored && adaptivePaneEvidence.terminal.bodyCentered && adaptivePaneEvidence.terminal.footerAnchored;
+    const adaptivePaneScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-adaptive-panes.png'), adaptivePaneScreenshot.toPNG());
+    window.setSize(1500, 940);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const restoredBrowserTab = await openDockSurface('Browser');
+    if (!restoredBrowserTab) throw new Error('Adaptive pane verification could not restore the Browser tab.');
     const focusedInspector = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('[aria-label="Focus right panel"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     await new Promise((resolve) => setTimeout(resolve, 100));
     const focusEvidence = await window.webContents.executeJavaScript(`(() => ({ restore: Boolean(document.querySelector('[aria-label="Restore right panel"]')), centerHidden: document.querySelector('.primary-pane')?.getAttribute('aria-hidden') }))()`);
@@ -913,13 +975,18 @@ async function runAutomatedUat(window) {
       const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Delete permanently')`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    const deletedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete permanently'); button?.click(); return Boolean(button); })()`);
+    const requestedUnavailableDeletion = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete permanently'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('h2')].some((item) => item.textContent?.trim() === 'Delete session permanently?')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const deletedUnavailableSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete permanently'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const ready = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session') && !document.querySelector('#session-title')`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
     }
     const unavailableLifecycleEvidence = await window.webContents.executeJavaScript(`(() => ({ historyUnavailable: document.querySelector('.session-empty-state')?.innerText?.includes('History unavailable') ?? false, titlePresent: [...document.querySelectorAll('.session-title')].some((item) => item.textContent?.trim() === 'Recovered lifecycle session'), dialogOpen: Boolean(document.querySelector('#session-title')) }))()`);
-    checks.unavailableHistoryLifecycle = selectedUnavailableSession && openedUnavailableActions && renamedUnavailableSession && reopenedForArchive && archivedUnavailableSession && openedArchivedFilter && selectedArchivedFilter && selectedArchivedSession && openedRestoreActions && restoredUnavailableSession && reopenedArchivedFilter && returnedToActiveFilter && selectedRestoredSession && openedDeleteActions && deletedUnavailableSession && !unavailableLifecycleEvidence.titlePresent && !unavailableLifecycleEvidence.dialogOpen;
+    checks.unavailableHistoryLifecycle = selectedUnavailableSession && openedUnavailableActions && renamedUnavailableSession && reopenedForArchive && archivedUnavailableSession && openedArchivedFilter && selectedArchivedFilter && selectedArchivedSession && openedRestoreActions && restoredUnavailableSession && reopenedArchivedFilter && returnedToActiveFilter && selectedRestoredSession && openedDeleteActions && requestedUnavailableDeletion && deletedUnavailableSession && !unavailableLifecycleEvidence.titlePresent && !unavailableLifecycleEvidence.dialogOpen;
     const createdSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => item.innerText.includes('New chat')); button?.click(); return Boolean(button); })()`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, header: document.querySelector('.header-context')?.textContent?.trim() ?? '', welcome: document.querySelector('.welcome-state')?.innerText ?? '', prompt: document.querySelector('#chat-prompt')?.value ?? null, deadHistoryControls: [...document.querySelectorAll('button')].filter((button) => ['Back', 'Forward'].includes(button.getAttribute('aria-label'))).map((button) => button.getAttribute('aria-label')) }))()`);
@@ -1010,13 +1077,18 @@ async function runAutomatedUat(window) {
       const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Delete project')`);
       if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    const requestedProjectDeletion = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete project'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('h2')].some((item) => item.textContent?.trim() === 'Delete project?') && !document.querySelector('#project-action-name')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     const deletedProject = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete project'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const gone = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project') && !document.querySelector('#project-action-name')`);
       if (gone) break; await new Promise((resolve) => setTimeout(resolve, 150));
     }
     const projectLifecycleEvidence = await window.webContents.executeJavaScript(`(() => ({ presentation: document.querySelector('.tree-label')?.textContent?.trim() ?? null, deleted: ![...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project'), dialogClosed: !document.querySelector('#project-action-name') }))()`);
-    checks.visibleProjectLifecycle = openedCommandForProject && openedAddProject && filledProjectDialog && submittedProject && openedProjectGrouping && openedGroupingSubmenu && selectedProjectGrouping && openedProjectContextForRename && openedProjectRename && submittedProjectRename && openedProjectContextForArchive && archivedProject && openedShowSubmenu && includedArchivedProjects && openedProjectContextForDelete && openedProjectDelete && deletedProject && projectLifecycleEvidence.deleted && projectLifecycleEvidence.dialogClosed;
+    checks.visibleProjectLifecycle = openedCommandForProject && openedAddProject && filledProjectDialog && submittedProject && openedProjectGrouping && openedGroupingSubmenu && selectedProjectGrouping && openedProjectContextForRename && openedProjectRename && submittedProjectRename && openedProjectContextForArchive && archivedProject && openedShowSubmenu && includedArchivedProjects && openedProjectContextForDelete && openedProjectDelete && requestedProjectDeletion && deletedProject && projectLifecycleEvidence.deleted && projectLifecycleEvidence.dialogClosed;
     const uatBrowserIdentity = { ownerKey: 'uat:browser', browserLeaseId: crypto.randomUUID() };
     claimBrowserView(uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
     await openGeneralBrowser(browserFixtureUrl, uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
@@ -1070,7 +1142,7 @@ async function runAutomatedUat(window) {
     checks.nativeGitLifecycle = /Add UAT note/.test(initialCommit.stdout) && /Amend UAT note/.test(amendedCommit.stdout) && commitMetadata.subject === 'Amend UAT note' && typeof pushed.stdout === 'string' && typeof pushed.stderr === 'string' && githubStatus.installed && githubStatus.authenticated && existingPullRequest === null && pullRequest.url === 'https://github.example.test/hermes-companion/uat/pull/1';
     await dispatchNative('git.worktree.remove', { repositoryPath, worktreePath, force: true });
     const ok = Object.values(checks).every(Boolean);
-    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, visibleGitEvidence: { ...visibleGitEvidence, commitNotice: visibleCommitNotice, pushNotice: visiblePushNotice, commitSubject: visibleCommitMetadata.stdout.trim(), remoteBranch: visibleRemoteBranch.stdout.trim() }, constrainedEvidence: { ...constrainedEvidence, sidebarLabels: constrainedSidebarEvidence }, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, unavailableLifecycleEvidence, sessionEvidence, projectLifecycleEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
+    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, visibleGitEvidence: { ...visibleGitEvidence, commitNotice: visibleCommitNotice, pushNotice: visiblePushNotice, commitSubject: visibleCommitMetadata.stdout.trim(), remoteBranch: visibleRemoteBranch.stdout.trim() }, constrainedEvidence: { ...constrainedEvidence, sidebarLabels: constrainedSidebarEvidence }, terminalEvidence, editorEvidence, browserAfterRapidReactivate, adaptivePaneEvidence, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, unavailableLifecycleEvidence, sessionEvidence, projectLifecycleEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
   } catch (error) { clearTimeout(timeout); await writeUatReport({ ok: false, platform: process.platform, rendererUrl, error: error instanceof Error ? error.message : String(error), capturedAt: new Date().toISOString() }); app.exit(1); }
 }
 

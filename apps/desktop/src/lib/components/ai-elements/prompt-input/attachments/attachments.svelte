@@ -55,7 +55,7 @@
 
 <div
 	aria-live="polite"
-	class={cn("overflow-hidden transition-[height] duration-200 ease-out", className)}
+	class={cn("overflow-hidden transition-[height] [transition-duration:var(--motion-layout)] ease-out", className)}
 	style:height="{computedHeight}px"
 	{...props}
 >

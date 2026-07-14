@@ -44,6 +44,7 @@
   import { clearWorkspaceLayoutJournal, readWorkspaceLayoutJournal, writeWorkspaceLayoutJournal } from '$lib/client/workspace-layout-journal';
   import { settingsSections } from '$lib/settings/settings-registry';
   import type { SettingsAction } from '$lib/settings/settings-registry';
+  import { capabilityLabel } from '$lib/capability-label';
   import { modelSelectionKey } from '$lib/model-identity';
   import { applyOpenRouterPolicy } from '$lib/openrouter-policy';
   import { errorMessage } from '$lib/error-message';
@@ -74,6 +75,7 @@
   let activeSurface = $state<CapabilityFamily | 'capabilities' | null>(null);
   let fullscreenPreview = $state(false);
   let projectsOpen = $state(false);
+  let projectDialogMode = $state<'add' | 'worktrees'>('add');
   let commandOpen = $state(false);
   let commandQuery = $state('');
   let commandSessionResults = $state<Array<{ sessionId: string; snippet: string; role: string | null; profileId: string | null; session: HermesSession }>>([]);
@@ -1094,6 +1096,11 @@
     settingsActive = true; activeSurface = null; activeSettingsSection = sectionId; activeSettingsItem = itemId; commandOpen = false;
   }
 
+  function openProjectDialog(mode: 'add' | 'worktrees' = 'add') {
+    projectDialogMode = mode;
+    projectsOpen = true;
+  }
+
   function closeSettings() {
     settingsActive = false;
     activeSettingsItem = undefined;
@@ -1171,6 +1178,35 @@
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onEnd, { once: true });
     window.addEventListener('pointercancel', onEnd, { once: true });
+  }
+
+  function resizePanelFromKeyboard(event: KeyboardEvent, panel: 'sidebar' | 'inspector' | 'terminal') {
+    if (panel !== 'sidebar' && !workspaceLayoutInteractive) return;
+    const workspace = document.querySelector<HTMLElement>('.workspace');
+    const primary = document.querySelector<HTMLElement>('.primary-layout');
+    const minimum = panel === 'sidebar' ? 224 : panel === 'inspector' ? 280 : 176;
+    const maximum = panel === 'sidebar'
+      ? 420
+      : panel === 'inspector'
+        ? Math.round((workspace?.getBoundingClientRect().width ?? window.innerWidth) * .48)
+        : Math.round((primary?.getBoundingClientRect().height ?? window.innerHeight) * .62);
+    const current = panel === 'sidebar' ? sidebarWidth : panel === 'inspector' ? inspectorWidth : terminalHeight;
+    let next = current;
+    if (event.key === 'Home') next = minimum;
+    else if (event.key === 'End') next = maximum;
+    else if (panel === 'sidebar' && event.key === 'ArrowLeft') next -= 16;
+    else if (panel === 'sidebar' && event.key === 'ArrowRight') next += 16;
+    else if (panel === 'inspector' && event.key === 'ArrowLeft') next += 16;
+    else if (panel === 'inspector' && event.key === 'ArrowRight') next -= 16;
+    else if (panel === 'terminal' && event.key === 'ArrowUp') next += 16;
+    else if (panel === 'terminal' && event.key === 'ArrowDown') next -= 16;
+    else return;
+    event.preventDefault();
+    next = Math.min(maximum, Math.max(minimum, next));
+    if (panel === 'sidebar') sidebarWidth = next;
+    if (panel === 'inspector') inspectorWidth = next;
+    if (panel === 'terminal') terminalHeight = next;
+    if (panel === 'inspector' || panel === 'terminal') queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout());
   }
 
   function toggleTerminal() {
@@ -1504,7 +1540,7 @@
       pinnedSessionIds={overview?.pinnedSessionIds ?? []} {activeSessionId} {selectedProjectId} activeProfileId={overview?.activeProfileId ?? 'default'} presentation={sessionPresentation}
       filter={profileUiPreferences?.sessionFilter ?? null} loading={workspaceStarting} archiveAvailable={sessionManagementAvailable}
       onselectsession={(id, projectId) => projectId ? void selectProjectThread(projectId, id) : void selectSession(id)}
-      onselectproject={(id) => { selectedProjectId = id; newSession(true); }} onnewproject={() => (projectsOpen = true)}
+      onselectproject={(id) => { selectedProjectId = id; newSession(true); }} onnewproject={() => openProjectDialog()}
       onprojectexpand={(id) => void hydrateProject(id)}
       onnewsession={(project) => { if (project) selectedProjectId = project.id; newSession(Boolean(project)); }}
       onnewworktree={(id, repositoryPaths) => { worktreeProjectTargetId = id; worktreeRepositoryPaths = repositoryPaths; worktreeOpen = true; }}
@@ -1520,7 +1556,8 @@
     {/if}
     <AccountFooter name={desktopPreferences.account.displayName} email={desktopPreferences.account.email} {settingsActive} ontogglesettings={() => settingsActive ? closeSettings() : openSettings('model')} />
   </aside>
-  <div class="pane-resizer sidebar-resizer" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'sidebar')}></div>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="pane-resizer sidebar-resizer" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin="224" aria-valuemax="420" aria-valuenow={sidebarWidth} aria-hidden={!sidebarVisible} inert={!sidebarVisible} tabindex={sidebarVisible ? 0 : -1} onkeydown={(event) => resizePanelFromKeyboard(event, 'sidebar')} onpointerdown={(event) => startPanelResize(event, 'sidebar')}></div>
 
   <main id="main-workspace" tabindex="-1" class="workspace">
     <div class="workspace-panes" data-settings-active={settingsActive} data-inspector-visible={inspectorVisible ? 'true' : 'false'} data-inspector-mode={inspectorMode}>
@@ -1531,7 +1568,7 @@
               onsaved={(preferences, configured, verified, verificationError) => { desktopPreferences = preferences; openRouterConfigured = configured; openRouterVerified = verified; openRouterVerificationError = verificationError; applyDesktopAppearance(preferences); }} onpolicysaved={(policy) => { openRouterPolicy = policy; }} onprofileuisaved={(preferences) => { profileUiPreferences = preferences; sessionPresentation = preferences.sessionPresentation; }} onsettingsaction={openSettingsAction} />
           {:else}
           <header class="workspace-header">
-            <div class="header-context"><strong>{activeSurface ?? activeSession?.title ?? (workspaceIsProjectScoped ? 'Project session' : 'New conversation')}</strong><span class="context-meta">{activeSurface ? 'Hermes capability' : workspaceIsProjectScoped ? activeProject?.name ?? 'Project' : activeProfile?.name ?? 'Hermes Agent'}</span>{#if !activeSurface && activeWorktree}<Badge variant="outline">{activeWorktree.branch}</Badge>{/if}</div>
+            <div class="header-context"><strong>{activeSurface ? activeSurface === 'capabilities' ? 'Capabilities' : capabilityLabel(activeSurface) : activeSession?.title ?? (workspaceIsProjectScoped ? 'Project session' : 'New conversation')}</strong><span class="context-meta">{activeSurface ? 'Hermes capability' : workspaceIsProjectScoped ? activeProject?.name ?? 'Project' : activeProfile?.name ?? 'Hermes Agent'}</span>{#if !activeSurface && activeWorktree}<Badge variant="outline">{activeWorktree.branch}</Badge>{/if}</div>
             <div class="header-drag-space" aria-hidden="true"></div>
             <div class="header-actions">
               {#if activeSurface}<Button size="sm" variant="ghost" onclick={() => chooseSurface(null)}><ArrowLeft data-icon="inline-start" /> Back</Button>{/if}
@@ -1606,15 +1643,17 @@
             /></div>{/if}
           {/if}
           </div>
-          <div class="pane-resizer terminal-resizer" role="separator" aria-label="Resize bottom panel" aria-orientation="horizontal" onpointerdown={(event) => startPanelResize(event, 'terminal')}></div>
-          <div class="terminal-split-region" aria-hidden={!terminalOpen}>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="pane-resizer terminal-resizer" role="separator" aria-label="Resize bottom panel" aria-orientation="horizontal" aria-valuemin="176" aria-valuemax="1000" aria-valuenow={terminalHeight} aria-hidden={!terminalOpen} inert={!terminalOpen} tabindex={terminalOpen ? 0 : -1} onkeydown={(event) => resizePanelFromKeyboard(event, 'terminal')} onpointerdown={(event) => startPanelResize(event, 'terminal')}></div>
+          <div class="terminal-split-region" aria-hidden={!terminalOpen} inert={!terminalOpen}>
             {#if workspaceLayoutInteractive}<TerminalSplit bind:this={terminalSplit} worktree={activeWorktree} unavailableReason={workspaceUnavailableReason} oncollapse={() => { terminalOpen = false; queueWorkspaceLayoutPersistence(workspaceLayoutIdentity, snapshotWorkspaceLayout()); }} />{/if}
           </div>
           </div>
           {/if}
         </section>
-      <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} unavailableReason={workspaceUnavailableReason} {browserOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value, identity) => { if (identity.ownerKey === browserOwnerKey && identity.browserLeaseId === browserLeaseId) fullscreenPreview = value; }} /></aside>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="1000" aria-valuenow={inspectorWidth} aria-hidden={!inspectorVisible} inert={!inspectorVisible} tabindex={inspectorVisible ? 0 : -1} onkeydown={(event) => resizePanelFromKeyboard(event, 'inspector')} onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} unavailableReason={workspaceUnavailableReason} {browserOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onopenworktrees={() => openProjectDialog('worktrees')} onfullscreenchange={(value, identity) => { if (identity.ownerKey === browserOwnerKey && identity.browserLeaseId === browserLeaseId) fullscreenPreview = value; }} /></aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">
@@ -1634,7 +1673,7 @@
     <div class="status-group status-right">
       {#if activeSession}<span class="status-item" title={activeSession.title}><Clock3 /> {sessionElapsed}</span>{/if}
       {#if statusShowsContext && contextUsage}<ContextUsagePopover id="status-context-usage" usage={contextUsage} compact trigger="status" />{/if}
-      {#if statusShowsApproval && approvalMode}<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} size="xs" variant="ghost" title={`Hermes approval mode: ${composerPermission.label}`} disabled={approvalPending}><ShieldCheck data-icon="inline-start" /> {composerPermission.label}</Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end" side="top" sideOffset={6}><DropdownMenu.Label>Approval mode</DropdownMenu.Label><DropdownMenu.Group>{#each composerPermissionOptions as option (option.id)}<DropdownMenu.Item onclick={() => void setApprovalMode(option.id as 'manual' | 'smart' | 'off')}><span class="status-menu-copy"><strong>{option.label}</strong><small>{option.description}</small></span>{#if option.id === approvalMode}<Check />{/if}</DropdownMenu.Item>{/each}</DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{/if}
+      {#if statusShowsApproval && approvalMode}<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} size="xs" variant="ghost" title={`Hermes approval mode: ${composerPermission.label}`} disabled={approvalPending}><ShieldCheck data-icon="inline-start" /> {composerPermission.label}</Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content class="status-approval-menu" align="end" side="top" sideOffset={6}><DropdownMenu.Label>Approval mode</DropdownMenu.Label><DropdownMenu.Group>{#each composerPermissionOptions as option (option.id)}<DropdownMenu.Item onclick={() => void setApprovalMode(option.id as 'manual' | 'smart' | 'off')}><span class="status-menu-copy"><strong>{option.label}</strong><small>{option.description}</small></span>{#if option.id === approvalMode}<Check />{/if}</DropdownMenu.Item>{/each}</DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{/if}
       <Button size="xs" variant={terminalOpen ? 'secondary' : 'ghost'} disabled={!workspaceLayoutInteractive} onclick={toggleTerminal} aria-pressed={terminalOpen} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} title={terminalOpen ? 'Hide terminal' : 'Show terminal'}><SquareTerminal /></Button>
     </div>
   </footer>
@@ -1646,7 +1685,7 @@
 <ConnectionDialog bind:open={connectOpen} connection={overview?.connections.find((connection) => connection.id === overview?.gateway.connection.id) ?? overview?.gateway.connection ?? null} onconnected={() => void loadWorkspace(true, true)} />
 <ProfileDialog bind:open={profileOpen} profiles={overview?.profiles ?? []} oncreated={() => { newSession(); void loadWorkspace(true, true); }} />
 <RestoreCheckpointDialog bind:open={restoreDialogOpen} prompt={restoreTarget?.text ?? ''} pending={sending} onrestore={() => void confirmCheckpointRestore()} />
-<ProjectDialog bind:open={projectsOpen} projects={overview?.projects ?? []} worktrees={overview?.worktrees ?? []} connectionKind={overview?.gateway.connection.kind ?? 'local'} onchanged={() => loadWorkspace()} oncreated={startProjectThread} />
+<ProjectDialog bind:open={projectsOpen} mode={projectDialogMode} projects={overview?.projects ?? []} worktrees={overview?.worktrees ?? []} connectionKind={overview?.gateway.connection.kind ?? 'local'} onchanged={() => loadWorkspace()} oncreated={startProjectThread} />
 <ProjectActionsDialog bind:open={projectActionsOpen} project={overview?.projects.find((project) => project.id === projectActionTargetId) ?? null} onchanged={() => loadWorkspace(true)} ondeleted={(projectId) => void handleProjectDeleted(projectId)} />
 <WorktreeDialog bind:open={worktreeOpen} project={overview?.projects.find((project) => project.id === worktreeProjectTargetId) ?? null} repositoryPaths={worktreeRepositoryPaths} oncreated={startWorktreeThread} />
 <WorktreeRemoveDialog bind:open={worktreeRemoveOpen} target={worktreeRemoveTarget} onremoved={(path) => void handleWorktreeRemoved(path)} />
@@ -1676,7 +1715,7 @@
     <CommandMenu.Group heading="Actions">
       {#each profileUiPreferences?.header.customActions ?? [] as action (action.id)}<CommandMenu.Item disabled={!activeWorktree} onclick={() => { commandOpen = false; void runProfileAction(action); }}><Play /><span>{action.name}</span>{#if action.keybinding}<CommandMenu.Shortcut>{action.keybinding}</CommandMenu.Shortcut>{/if}</CommandMenu.Item>{/each}
       <CommandMenu.Item onclick={() => { void newSession(); commandOpen = false; }}><SquarePen /><span>New chat</span><CommandMenu.Shortcut>⌘N</CommandMenu.Shortcut></CommandMenu.Item>
-      <CommandMenu.Item onclick={() => { projectsOpen = true; commandOpen = false; }}><FolderGit2 /><span>Add project or folder</span></CommandMenu.Item>
+      <CommandMenu.Item onclick={() => { openProjectDialog(); commandOpen = false; }}><FolderGit2 /><span>Add project or folder</span></CommandMenu.Item>
     </CommandMenu.Group>
     <CommandMenu.Separator />
     <CommandMenu.Group heading="Recents">
@@ -1722,13 +1761,16 @@
   .sidebar-header > :global([data-slot='dropdown-menu-trigger']) { min-inline-size: 0; inline-size: fit-content; flex: 0 1 auto; }
   .sidebar-header :global(button), .workspace-header :global(button) { -webkit-app-region: no-drag; }
   :global(.profile-switcher) { inline-size: fit-content; max-inline-size: calc(var(--shell-sidebar-track) - 3.4rem); justify-content: flex-start; gap: .35rem; block-size: 2.55rem; padding-inline: .55rem .45rem; border-radius: .85rem; text-align: start; }
-  :global(.profile-switcher strong) { min-inline-size: 0; overflow: hidden; font-size: 1.05rem; font-weight: 625; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+  :global(.profile-switcher strong) { min-inline-size: 0; overflow: hidden; font-size: 1rem; font-weight: 625; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
   :global(.profile-switcher .profile-chevron) { inline-size: .9rem; opacity: 0; translate: -.15rem 0; transition: opacity var(--motion-fast) ease, translate var(--motion-fast) ease; }
   :global(.profile-switcher:hover .profile-chevron), :global(.profile-switcher:focus-visible .profile-chevron), :global(.profile-switcher[data-state='open'] .profile-chevron) { opacity: 1; translate: 0 0; }
-  .profile-menu-copy { min-inline-size: 0; display: grid; gap: .08rem; } .profile-menu-copy strong { overflow: hidden; font-size: .74rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; } .profile-menu-copy small { overflow: hidden; color: var(--muted-foreground); font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; } :global(.profile-menu) { inline-size: min(18rem, calc(100vw - 1rem)); } :global(.profile-menu [data-slot='dropdown-menu-item']) { align-items: start; }
+  .profile-menu-copy { min-inline-size: 0; display: grid; gap: .08rem; } .profile-menu-copy strong { overflow: hidden; font-size: var(--type-small); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; } .profile-menu-copy small { overflow: hidden; color: var(--muted-foreground); font-size: var(--type-caption); text-overflow: ellipsis; white-space: nowrap; } :global(.profile-menu) { inline-size: min(18rem, calc(100vw - 1rem)); } :global(.profile-menu [data-slot='dropdown-menu-item']) { align-items: start; }
   .sidebar-actions { display: grid; gap: .05rem; padding: .05rem .45rem .35rem; } .sidebar-actions :global(button) { justify-content: flex-start; }
-  kbd { margin-inline-start: auto; color: var(--muted-foreground); font-family: var(--font-mono); font-size: .62rem; }
+  kbd { margin-inline-start: auto; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--type-caption); }
   .pane-resizer { position: absolute; z-index: 24; touch-action: none; background: transparent; }
+  .pane-resizer::after { content: ''; position: absolute; inset: .15rem; border-radius: 999px; background: transparent; transition: background var(--motion-fast) var(--ease-standard); }
+  .pane-resizer:focus-visible { outline: none; }
+  .pane-resizer:focus-visible::after { background: var(--ring); }
   .sidebar-resizer { inset-block: 0 var(--shell-status-height); inset-inline-start: calc(var(--shell-sidebar-track) - .3rem); inline-size: .6rem; cursor: col-resize; }
   .companion-shell[data-sidebar-visible='false'] .sidebar-resizer { opacity: 0; pointer-events: none; }
   .workspace { grid-column: 2; grid-row: 1; min-inline-size: 0; min-block-size: 0; block-size: 100%; overflow: hidden; }
@@ -1742,7 +1784,7 @@
   .workspace-panes[data-inspector-mode='focused'] .primary-pane { opacity: 0; pointer-events: none; }
   .workspace-panes[data-inspector-visible='false'] .inspector-pane { border-inline-start-color: transparent; opacity: 0; translate: 100% 0; pointer-events: none; }
   .workspace-header { min-block-size: var(--shell-titlebar-height); display: flex; align-items: safe center; gap: .65rem; padding: .3rem var(--shell-chrome-trailing-width) .3rem max(.75rem, calc(var(--window-safe-inline-start) + var(--shell-chrome-leading-width) - var(--shell-sidebar-track))); border-block-end: 1px solid var(--border); background: var(--background); -webkit-app-region: no-drag; }
-  .header-context { min-inline-size: 0; display: flex; align-items: center; gap: .45rem; -webkit-app-region: drag; user-select: none; } .header-context strong { min-inline-size: 0; overflow: hidden; font-size: .78rem; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; } .context-meta { flex: none; color: var(--muted-foreground); font-size: .64rem; } .header-context :global(.badge) { flex: none; } .header-drag-space { min-inline-size: 1rem; align-self: stretch; flex: 1; -webkit-app-region: drag; } .header-actions { display: flex; align-items: center; gap: .12rem; }
+  .header-context { min-inline-size: 0; display: flex; align-items: center; gap: .45rem; -webkit-app-region: drag; user-select: none; } .header-context strong { min-inline-size: 0; overflow: hidden; font-size: var(--type-body); font-weight: 590; text-overflow: ellipsis; white-space: nowrap; } .context-meta { flex: none; color: var(--muted-foreground); font-size: var(--type-caption); } .header-context :global(.badge) { flex: none; } .header-drag-space { min-inline-size: 1rem; align-self: stretch; flex: 1; -webkit-app-region: drag; } .header-actions { display: flex; align-items: center; gap: .12rem; }
   .primary-pane { grid-column: 1; block-size: 100%; min-inline-size: 0; min-block-size: 0; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: clip; background: var(--surface-base); container: primary-pane / inline-size; }
   .primary-pane > :global(.settings-scroll) { grid-row: 1 / -1; min-block-size: 0; }
   .primary-layout { min-block-size: 0; position: relative; display: grid; grid-template-rows: minmax(0, 1fr) 0 0; transition: grid-template-rows var(--motion-layout) var(--ease-standard); }
@@ -1759,7 +1801,7 @@
   .session-sidebar :global(li > button span:not(.session-icons)), .inspector-pane :global(li > button span) { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :global(.conversation-root) { min-block-size: 0; } :global(.conversation-content) { inline-size: min(100%, var(--chat-rail-max-inline-size)); margin-inline: auto; padding: clamp(1rem, 3cqi, 2.2rem) var(--chat-rail-padding-inline) 1rem; gap: 1.5rem; }
   :global(.new-conversation-content) { inline-size: 100%; max-inline-size: none; margin: 0; padding: 0; gap: 0; }
-  .message-author { max-inline-size: 100%; display: flex; align-items: center; gap: .45rem; color: var(--muted-foreground); font-family: var(--font-ui); font-size: .68rem; font-weight: 650; }
+  .message-author { max-inline-size: 100%; display: flex; align-items: center; gap: .45rem; color: var(--muted-foreground); font-family: var(--font-ui); font-size: var(--type-caption); font-weight: 650; }
   .message-author[data-message-role='user'] { align-self: flex-end; justify-content: flex-end; }
   .message-author time { flex: none; font-weight: 400; }
   :global(.conversation-message) { position: relative; min-inline-size: 0; }
@@ -1768,13 +1810,13 @@
   :global(.response-pending) { color: var(--muted-foreground); font-family: var(--font-body); font-size: var(--type-body); }
   .message-generation-state { align-self: flex-start; color: var(--muted-foreground); font-family: var(--font-ui); font-size: var(--type-status); }
   .message-generation-state[data-tone='negative'] { color: var(--status-negative); }
-  .tool-list { display: grid; gap: .25rem; margin-block-start: .45rem; } .tool-list > div { display: flex; align-items: center; gap: .45rem; border-block-start: 1px solid var(--border); padding: .4rem .1rem; font-size: .72rem; } .tool-list :global(svg) { inline-size: .85rem; color: var(--muted-foreground); } .tool-list span { flex: 1; }
+  .tool-list { display: grid; gap: .25rem; margin-block-start: .45rem; } .tool-list > div { display: flex; align-items: center; gap: .45rem; border-block-start: 1px solid var(--border); padding: .4rem .1rem; font-size: var(--type-small); } .tool-list :global(svg) { inline-size: .85rem; color: var(--muted-foreground); } .tool-list span { flex: 1; }
   .chat-approval { display: grid; gap: .55rem; margin-block-start: .55rem; border-radius: var(--radius); background: color-mix(in oklab, var(--status-warning), transparent 92%); padding: .65rem; }
   .chat-approval > div { display: flex; align-items: flex-start; gap: .45rem; }
   .chat-approval > div:first-child > :global(svg) { inline-size: .9rem; flex: none; margin-block-start: .1rem; color: var(--status-warning); }
   .chat-approval span { min-inline-size: 0; display: grid; gap: .12rem; }
-  .chat-approval strong { font-size: .72rem; font-weight: 620; }
-  .chat-approval small { overflow-wrap: anywhere; color: var(--muted-foreground); font-family: var(--font-mono); font-size: .62rem; line-height: 1.45; }
+  .chat-approval strong { font-size: var(--type-small); font-weight: 620; }
+  .chat-approval small { overflow-wrap: anywhere; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--type-caption); line-height: 1.45; }
   .chat-approval > div:last-child { flex-wrap: wrap; }
   :global(.message-attachments) { inline-size: 100%; margin-block: .65rem .25rem; }
   :global(.message-attachment) { inline-size: min(100%, 28rem); block-size: auto; aspect-ratio: 1.6; margin-inline-start: 0; border: 1px solid var(--border); }
@@ -1782,8 +1824,8 @@
   .session-empty-state { inline-size: min(100% - 2rem, 28rem); display: grid; justify-items: center; gap: .45rem; margin-inline: auto; color: var(--muted-foreground); text-align: center; }
   .session-empty-state > :global(svg) { inline-size: 1rem; color: var(--status-negative); }
   .session-empty-state h1, .session-empty-state p { margin: 0; }
-  .session-empty-state h1 { color: var(--foreground); font-size: .86rem; font-weight: 600; }
-  .session-empty-state p { max-inline-size: 42ch; overflow-wrap: anywhere; font-family: var(--font-body); font-size: .7rem; line-height: 1.5; }
+  .session-empty-state h1 { color: var(--foreground); font-size: var(--type-body); font-weight: 600; }
+  .session-empty-state p { max-inline-size: 42ch; overflow-wrap: anywhere; font-family: var(--font-body); font-size: var(--type-small); line-height: 1.5; }
   .session-empty-state > div { display: flex; gap: .25rem; }
   .new-session-composer { inline-size: 100%; margin-block-start: .85rem; text-align: start; }
   .workspace-loading { min-block-size: min(22rem, 56dvh); display: grid; place-content: center; justify-items: center; gap: .5rem; color: var(--muted-foreground); font-family: var(--font-ui); font-size: var(--type-status); }
@@ -1793,14 +1835,15 @@
   .floating-composer-shell { position: fixed; inset-inline-start: 50%; inset-block-end: 1rem; z-index: 60; inline-size: min(42rem, calc(100vw - 2rem)); transform: translateX(-50%); }
   :global(.preview-exit) { position: absolute; inset-inline-start: -2.5rem; inset-block-end: .25rem; opacity: 0; transition: opacity var(--motion-fast) var(--ease-standard); }
   .floating-composer-shell:is(:hover, :focus-within) :global(.preview-exit) { opacity: 1; }
-  .status-bar { grid-column: 1 / -1; grid-row: 2; min-inline-size: 0; display: flex; align-items: center; justify-content: space-between; gap: .5rem; overflow: hidden; border-block-start: 1px solid var(--border); background: color-mix(in oklab, var(--sidebar), black 10%); color: var(--muted-foreground); font-size: .6rem; }
+  .status-bar { grid-column: 1 / -1; grid-row: 2; min-inline-size: 0; display: flex; align-items: center; justify-content: space-between; gap: .5rem; overflow: hidden; border-block-start: 1px solid var(--border); background: color-mix(in oklab, var(--sidebar), black 10%); color: var(--muted-foreground); font-size: var(--type-caption); }
   .status-bar, .status-bar :global(button), .status-bar :global(small), .status-bar :global(span) { font-family: var(--font-mono); letter-spacing: 0; }
   .status-group { min-inline-size: 0; display: flex; align-items: stretch; gap: .05rem; overflow: hidden; } .status-left { padding-inline-start: .2rem; } .status-right { justify-content: flex-end; padding-inline-end: .2rem; }
-  .status-group :global(button) { block-size: var(--shell-status-height); border-radius: calc(var(--radius) * .45); color: var(--muted-foreground); font-size: .6rem; } .status-group :global(button:hover:not(:disabled)) { background: var(--sidebar-accent); color: var(--foreground); } .status-group :global(button small) { color: var(--muted-foreground); font-size: .54rem; } .status-group :global(button svg) { inline-size: .7rem; }
+  .status-group :global(button) { block-size: var(--shell-status-height); border-radius: calc(var(--radius) * .45); color: var(--muted-foreground); font-size: var(--type-caption); } .status-group :global(button:hover:not(:disabled)) { background: var(--sidebar-accent); color: var(--foreground); } .status-group :global(button small) { color: var(--muted-foreground); font-size: var(--type-caption); } .status-group :global(button svg) { inline-size: .7rem; }
   .status-group :global(.status-gateway > span) { color: var(--muted-foreground); font-weight: 450; }
   .status-group :global(.status-gateway:hover > span), .status-group :global(.status-gateway:focus-visible > span) { color: var(--foreground); }
   .status-group :global(.status-gateway > small) { color: color-mix(in oklab, var(--muted-foreground), transparent 18%); font-weight: 400; }
-  .status-menu-copy { display: grid; gap: .05rem; } .status-menu-copy strong { font-size: var(--type-menu); font-weight: 560; } .status-menu-copy small { color: var(--muted-foreground); font-family: var(--font-body); font-size: var(--type-caption); }
+  :global(.status-approval-menu) { inline-size: min(18rem, calc(100dvi - 1rem)); }
+  .status-menu-copy { min-inline-size: 0; display: grid; gap: .05rem; } .status-menu-copy strong { font-size: var(--type-menu); font-weight: 560; } .status-menu-copy small { color: var(--muted-foreground); font-family: var(--font-body); font-size: var(--type-caption); line-height: 1.35; }
   .status-item { min-inline-size: 0; display: flex; align-items: center; gap: .3rem; padding-inline: .45rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .status-item :global(svg) { inline-size: .72rem; flex: none; }
   :global(.status-yolo) { color: var(--foreground) !important; }
   @media (max-width: 70rem) { .status-group :global(button span), .status-item { max-inline-size: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }

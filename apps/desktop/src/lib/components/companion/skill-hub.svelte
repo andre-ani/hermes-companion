@@ -62,7 +62,7 @@
 </section>
 
 <style>
-  .skill-hub { min-block-size: 0; block-size: 100%; overflow: auto; padding: clamp(3.5rem, 7vh, 5rem) clamp(1rem, 3cqi, 2rem) 3rem; }
+  .skill-hub { min-block-size: 0; block-size: 100%; overflow: auto; padding: clamp(1rem, 3cqi, 1.75rem) clamp(1rem, 3cqi, 2rem) 3rem; }
   .skill-hub > header, .hub-search, .hub-error, .hub-loading, .source-row, .skill-results { inline-size: min(100%, 64rem); margin-inline: auto; }
   h1, h2, p { margin: 0; } h1 { margin-block-start: .15rem; font-size: 1.1rem; font-weight: 650; letter-spacing: -.02em; } header p { margin-block-start: .18rem; color: var(--muted-foreground); font-family: var(--font-body); font-size: var(--type-caption); }
   .hub-search { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem; margin-block-start: 1.2rem; } .hub-search > :global(svg) { position: absolute; inset-inline-start: .65rem; inset-block-start: .58rem; z-index: 1; inline-size: .85rem; color: var(--muted-foreground); pointer-events: none; } .hub-search :global(input) { padding-inline-start: 2rem; }

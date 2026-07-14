@@ -335,7 +335,7 @@
   .repository-heading span, .lane-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .repository-heading small { font: inherit; color: var(--muted-foreground); }
   .repository-heading :global(svg), .lane-heading :global(svg) { inline-size: .78rem; block-size: .78rem; }
-  .lane-heading { padding-inline-start: 1.42rem; font-size: var(--text-xs); }
+  .lane-heading { padding-inline-start: 1.42rem; font-size: var(--type-caption); }
   .project-lanes > li + li { margin-block-start: .18rem; }
   .session-entry { --session-trailing-safe-area: 3.2rem; position: relative; }
   .session-entry > button:first-child { inline-size: 100%; min-inline-size: 0; display: grid; grid-template-columns: 1.15rem minmax(0, 1fr) var(--session-trailing-safe-area); align-items: start; gap: .42rem; border: 0; border-radius: calc(var(--radius) * .8); background: transparent; padding: .46rem .48rem .46rem .35rem; color: var(--muted-foreground); text-align: start; }
@@ -352,12 +352,12 @@
   .session-signal[data-signal='unread'] { color: var(--signal-unread); }
   .unread-dot { inline-size: .38rem; block-size: .38rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px color-mix(in oklab, currentColor, transparent 82%); }
   .session-copy { min-inline-size: 0; display: grid; gap: .16rem; }
-  .session-title { overflow: hidden; font-size: .8rem; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
-  .session-meta { min-inline-size: 0; display: flex; align-items: center; gap: .25rem; overflow: hidden; color: var(--muted-foreground); font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
+  .session-title { overflow: hidden; font-size: var(--type-body); font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta { min-inline-size: 0; display: flex; align-items: center; gap: .25rem; overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--type-caption); text-overflow: ellipsis; white-space: nowrap; }
   .session-icons { display: inline-flex; align-items: center; gap: .18rem; flex: none; }
   .session-icons :global(svg) { inline-size: .7rem; block-size: .7rem; }
   .session-icons :global(.provider-mark), .session-icons :global(.provider-mark img) { inline-size: .7rem; block-size: .7rem; }
-  .session-age { align-self: start; justify-self: end; color: var(--muted-foreground); font-size: .65rem; }
+  .session-age { align-self: start; justify-self: end; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--type-caption); }
   .session-row-actions { position: absolute; inset-inline-end: .2rem; inset-block-start: .28rem; inline-size: var(--session-trailing-safe-area); display: flex; align-items: center; justify-content: flex-end; gap: .04rem; opacity: 0; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-standard); }
   .session-row-actions :global(button) { color: var(--muted-foreground); }
   .session-entry:hover .session-row-actions, .session-entry:focus-within .session-row-actions { opacity: 1; pointer-events: auto; }
@@ -365,7 +365,7 @@
   :global(.session-context-menu) { inline-size: 12.5rem; }
   :global(.project-context-menu) { inline-size: 11rem; }
   :global(.session-detail-card) { --detail-primary: color-mix(in oklab, var(--foreground), var(--muted-foreground) 72%); --detail-secondary: var(--muted-foreground); inline-size: min(14.5rem, calc(100vw - 1rem)); display: grid; gap: .5rem; }
-  :global(.session-detail-title) { min-inline-size: 0; color: var(--foreground); overflow-wrap: anywhere; font-size: .7rem; font-weight: 400; line-height: 1.35; }
+  :global(.session-detail-title) { min-inline-size: 0; color: var(--foreground); overflow-wrap: anywhere; font-size: var(--type-small); font-weight: 400; line-height: 1.35; }
   :global(.session-detail-list) { display: grid; gap: .42rem; margin: 0; padding: 0; list-style: none; }
   :global(.session-detail-line) { min-inline-size: 0; display: grid; grid-template-columns: .9rem minmax(0, 1fr); align-items: start; gap: .45rem; color: var(--detail-secondary); font-size: var(--type-caption); font-weight: 400; line-height: 1.4; }
   :global(.session-detail-line svg), :global(.session-detail-line .provider-mark), :global(.session-detail-line .provider-mark img) { inline-size: .8rem; block-size: .8rem; margin-block-start: .08rem; }
@@ -379,9 +379,9 @@
   .project-heading > button:first-child:hover, .project-heading > button:first-child.active { color: var(--foreground); }
   .project-heading > button:first-child :global(svg) { inline-size: .72rem; block-size: .72rem; flex: none; }
   .project-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .project-name { font-size: .8rem; font-weight: 520; }
+  .project-name { font-size: var(--type-body); font-weight: 520; }
   .project-sessions { padding-inline-start: 0 !important; }
-  .tree-empty { margin: 0; padding: .6rem .5rem; color: var(--muted-foreground); font-size: .68rem; }
+  .tree-empty { margin: 0; padding: .6rem .5rem; color: var(--muted-foreground); font-size: var(--type-caption); }
   @keyframes session-working { to { transform: rotate(1turn); } }
   @media (prefers-reduced-motion: reduce) { .session-signal[data-signal='working'] :global(svg), :global(.session-detail-line .status-working) { animation: none; } }
 </style>

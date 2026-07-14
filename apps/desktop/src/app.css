@@ -1,6 +1,5 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
-@import '@fontsource-variable/manrope';
 @import '@fontsource-variable/inter';
 @import '@fontsource-variable/jetbrains-mono';
 @source "../../../node_modules/streamdown-svelte/dist/**/*.{js,svelte,ts}";
@@ -75,15 +74,17 @@
   --context-color-chroma: 0.13;
   --context-neutral: oklch(0.52 0 0);
   --font-body: 'Inter Variable', Inter, ui-sans-serif, system-ui, sans-serif;
-  --font-ui: 'Manrope Variable', Manrope, ui-sans-serif, system-ui, sans-serif;
+  --font-ui: var(--font-body);
+  --font-heading: var(--font-body);
   --font-sans: var(--font-body);
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-  --type-body: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
-  --type-ui: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
-  --type-menu: clamp(0.7rem, 0.69rem + 0.04vw, 0.75rem);
-  --type-status: clamp(0.675rem, 0.66rem + 0.04vw, 0.72rem);
-  --type-caption: clamp(0.625rem, 0.61rem + 0.04vw, 0.675rem);
-  --type-small: clamp(0.6875rem, 0.67rem + 0.08vw, 0.75rem);
+  /* Three compact reading sizes cover the shell; aliases describe purpose, not new sizes. */
+  --type-body: 0.8125rem;
+  --type-ui: var(--type-body);
+  --type-small: 0.75rem;
+  --type-caption: 0.6875rem;
+  --type-menu: var(--type-caption);
+  --type-status: var(--type-caption);
   --line-height-ui: 1.25;
   --prose-line-height: 1.62;
   --prose-flow-space: 0.875rem;
@@ -233,7 +234,7 @@
   :where(button, input, textarea, select) { font: inherit; }
   :where(h1, h2, h3, h4, h5, h6, legend, label, button, select, nav, [role='menu'], [role='tab'], [data-status], .data-label) { font-family: var(--font-ui); font-size-adjust: from-font; font-optical-sizing: auto; }
   :where(h1, h2, h3, h4, h5, h6) { text-wrap: balance; }
-  :where(code, pre, kbd, samp, .font-mono, [data-code]) { font-family: var(--font-mono); font-size-adjust: from-font; font-variant-ligatures: contextual; }
+  :where(code, pre, kbd, samp, time, output, var, .font-mono, .data-value, [data-code], [data-tech]) { font-family: var(--font-mono); font-size-adjust: from-font; font-variant-ligatures: contextual; }
   :where(button, a, input, textarea, select):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   :where(button:not(:disabled)) { cursor: pointer; }
   :where(::selection) { background: color-mix(in oklab, var(--primary), transparent 60%); }

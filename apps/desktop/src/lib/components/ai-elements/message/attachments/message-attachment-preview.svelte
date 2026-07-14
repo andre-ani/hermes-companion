@@ -39,7 +39,7 @@
 	>
 		<img
 			alt={data.filename || "attachment"}
-			class="size-full object-cover object-center transition-transform duration-200 group-hover:scale-[1.03]"
+			class="size-full object-cover object-center transition-transform [transition-duration:var(--motion-fast)] group-hover:scale-[1.03]"
 			height={96}
 			onload={handleImageLoad}
 			{src}

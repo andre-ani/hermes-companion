@@ -21,9 +21,9 @@
 
 <style>
   .account-footer { min-inline-size: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; margin-block-start: auto; padding: .55rem .55rem .65rem; }
-  :global(.account-avatar) { inline-size: 2rem; block-size: 2rem; font-family: var(--font-ui); font-size: .72rem; }
+  :global(.account-avatar) { inline-size: 2rem; block-size: 2rem; font-family: var(--font-ui); font-size: var(--type-small); }
   .account-copy { min-inline-size: 0; display: grid; gap: .06rem; }
   .account-copy strong, .account-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .account-copy strong { font-family: var(--font-ui); font-size: .72rem; font-weight: 590; }
-  .account-copy small { color: var(--muted-foreground); font-size: .62rem; }
+  .account-copy strong { font-family: var(--font-ui); font-size: var(--type-small); font-weight: 590; }
+  .account-copy small { color: var(--muted-foreground); font-size: var(--type-caption); }
 </style>

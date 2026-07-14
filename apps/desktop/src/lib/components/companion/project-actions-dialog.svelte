@@ -13,7 +13,8 @@
   let name = $state('');
   let pending = $state('');
   let error = $state('');
-  $effect(() => { if (open && project) { name = project.name; error = ''; } });
+  let confirmingDelete = $state(false);
+  $effect(() => { if (open && project) { name = project.name; error = ''; confirmingDelete = false; } });
 
   async function rename() {
     if (!project || !name.trim() || pending) return; pending = 'rename'; error = '';
@@ -39,13 +40,17 @@
 
 <Dialog.Root bind:open>
   <Dialog.Content class="sm:max-w-md">
-    <Dialog.Header><Dialog.Title>Project actions</Dialog.Title><Dialog.Description>Rename, archive, or remove this Hermes project. Its sessions are preserved.</Dialog.Description></Dialog.Header>
+    <Dialog.Header><Dialog.Title>{confirmingDelete ? 'Delete project?' : 'Project actions'}</Dialog.Title><Dialog.Description>{confirmingDelete ? `Remove “${project?.name ?? 'this project'}” from Companion. Its Hermes sessions and files are preserved.` : 'Rename, archive, or remove this Hermes project. Its sessions are preserved.'}</Dialog.Description></Dialog.Header>
     {#if error}<Alert.Root variant="destructive"><CircleAlert /><Alert.Title>Project action failed</Alert.Title><Alert.Description>{error}</Alert.Description></Alert.Root>{/if}
-    <form class="rename-form" onsubmit={(event) => { event.preventDefault(); void rename(); }}>
-      <Field.FieldGroup><Field.Field><Field.FieldLabel for="project-action-name">Name</Field.FieldLabel><Input id="project-action-name" name="name" bind:value={name} required maxlength={240} /></Field.Field></Field.FieldGroup>
-      <Button type="submit" disabled={Boolean(pending)}>Save name</Button>
-    </form>
-    <Dialog.Footer><Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{project?.archived ? 'Restore project' : 'Archive project'}</Button><Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>Delete project</Button></Dialog.Footer>
+    {#if confirmingDelete}
+      <Dialog.Footer><Button type="button" variant="outline" disabled={Boolean(pending)} onclick={() => (confirmingDelete = false)}>Cancel</Button><Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>{pending === 'delete' ? 'Deleting…' : 'Delete project'}</Button></Dialog.Footer>
+    {:else}
+      <form class="rename-form" onsubmit={(event) => { event.preventDefault(); void rename(); }}>
+        <Field.FieldGroup><Field.Field><Field.FieldLabel for="project-action-name">Name</Field.FieldLabel><Input id="project-action-name" name="name" bind:value={name} required maxlength={240} /></Field.Field></Field.FieldGroup>
+        <Button type="submit" disabled={Boolean(pending)}>Save name</Button>
+      </form>
+      <Dialog.Footer><Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{project?.archived ? 'Restore project' : 'Archive project'}</Button><Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={() => (confirmingDelete = true)}>Delete project</Button></Dialog.Footer>
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
 

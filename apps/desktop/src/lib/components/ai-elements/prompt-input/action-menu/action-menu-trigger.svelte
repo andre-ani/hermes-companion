@@ -12,11 +12,13 @@
 </script>
 
 <DropdownMenu.Trigger>
-	<Button class={className} {...props}>
-		{#if children}
-			{@render children()}
-		{:else}
-			<PlusIcon class="size-4" />
-		{/if}
-	</Button>
+	{#snippet child({ props: triggerProps })}
+		<Button {...triggerProps} aria-label="Add attachments or context" class={className} {...props}>
+			{#if children}
+				{@render children()}
+			{:else}
+				<PlusIcon class="size-4" />
+			{/if}
+		</Button>
+	{/snippet}
 </DropdownMenu.Trigger>

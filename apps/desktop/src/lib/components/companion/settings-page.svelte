@@ -12,7 +12,8 @@
   import { setProfileUiPreferences } from '$lib/client/remote/profile-ui.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import type { CapabilityFamily, DesktopPreferences, OpenRouterPolicyOverview, ProfileControlDisplay, ProfileUiPreferences } from '@hermes-companion/contracts';
-  import { Check, CircleAlert, ExternalLink, LoaderCircle, ShieldCheck } from '@lucide/svelte';
+  import { Check, CircleAlert, LoaderCircle, ShieldCheck } from '@lucide/svelte';
+  import OperationsCenter from './operations-center.svelte';
 
   let { sectionId, itemId, preferences, profileConnectionId = null, profileUiPreferences = null, openRouterConfigured = false, openRouterVerified = false, openRouterVerificationError = null, openRouterPolicy = null, availableSurfaces = [], connectionAvailable = false, onsaved, onpolicysaved, onprofileuisaved, onsettingsaction }: {
     sectionId: string;
@@ -44,8 +45,14 @@
   let initialized = false;
   let profileControlDraft = $state<{ approval: ProfileControlDisplay; context: ProfileControlDisplay }>({ approval: 'status', context: 'status' });
   let thinkingStatusDraft = $state<'plain' | 'personality' | 'hidden'>('personality');
+  let settingsScroll = $state<HTMLDivElement>();
   const section = $derived(settingsSections.find((entry) => entry.id === sectionId) ?? settingsSections[0]);
-  const sectionHasDesktopSettings = $derived(['appearance', 'notifications', 'about'].includes(section.id));
+  const desktopDirty = $derived(JSON.stringify(draft) !== JSON.stringify(preferences));
+  const thinkingDirty = $derived(Boolean(profileUiPreferences) && thinkingStatusDraft !== profileUiPreferences?.thinkingStatus);
+  const profileControlsDirty = $derived(Boolean(profileUiPreferences) && JSON.stringify(profileControlDraft) !== JSON.stringify(profileUiPreferences?.contextualControls));
+  const sectionHasDesktopSettings = $derived(['chat', 'appearance', 'notifications', 'about'].includes(section.id));
+  const sectionDirty = $derived(section.id === 'chat' ? thinkingDirty : section.id === 'appearance' ? desktopDirty || profileControlsDirty : ['notifications', 'about'].includes(section.id) ? desktopDirty : false);
+  const embeddedSurfaces = $derived([...new Set(section.items.flatMap((item) => item.action?.kind === 'surface' ? [item.action.surface] : []))]);
   const actionAvailable = (action?: SettingsAction) => action?.kind === 'connection' ? connectionAvailable : action?.kind === 'surface' ? availableSurfaces.includes(action.surface) : false;
 
   $effect(() => {
@@ -64,6 +71,11 @@
   });
 
   $effect(() => {
+    section.id;
+    requestAnimationFrame(() => { if (settingsScroll) settingsScroll.scrollTop = 0; });
+  });
+
+  $effect(() => {
     if (!itemId) return;
     requestAnimationFrame(() => document.getElementById(`setting-${itemId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   });
@@ -78,7 +90,7 @@
       openRouterApiKey = ''; clearOpenRouterApiKey = false;
       feedback = replacedCredential ? 'Credential saved and verified' : removedCredential ? (result.openRouter.configured ? 'Stored credential removed; environment credential remains active' : 'Stored credential removed') : section.id === 'providers' ? 'Credential verified' : 'Settings saved';
       onsaved(result.preferences, result.openRouter.configured, result.openRouter.verified, result.openRouter.error);
-      onpolicysaved(await resolveRemoteResult(getOpenRouterPolicy({ refresh: true })));
+      if (section.id === 'providers') onpolicysaved(await resolveRemoteResult(getOpenRouterPolicy({ refresh: true })));
     } catch (cause) { failure = cause instanceof Error ? cause.message : 'Settings could not be saved.'; }
     finally { saving = false; }
   }
@@ -114,24 +126,35 @@
     finally { saving = false; }
   }
 
+  async function saveSection() {
+    if (!sectionDirty || saving) return;
+    if (section.id === 'chat') { await saveThinkingStatus(); return; }
+    if (section.id === 'appearance') {
+      if (desktopDirty) await save();
+      if (profileControlsDirty) await saveProfileControlDisplay();
+      return;
+    }
+    await save();
+  }
+
 </script>
 
-<div class="settings-scroll">
+<div class="settings-scroll" bind:this={settingsScroll}>
   <article class="settings-page" aria-labelledby="settings-heading">
-    <header class="settings-page-header"><div><h1 id="settings-heading">{section.label}</h1><p>{section.description}</p></div>{#if sectionHasDesktopSettings}<Button size="sm" onclick={() => void save()} disabled={saving}>{#if saving}<LoaderCircle data-icon="inline-start" class="spin" />{/if}Save</Button>{/if}</header>
-    {#if feedback}<p class="settings-feedback" role="status"><Check />{feedback}</p>{/if}
+    <header class="settings-page-header"><div><h1 id="settings-heading">{section.label}</h1><p>{section.description}</p></div>{#if sectionHasDesktopSettings}<Button size="sm" onclick={() => void saveSection()} disabled={saving || !sectionDirty}>{#if saving}<LoaderCircle data-icon="inline-start" class="spin" /> Saving…{:else if feedback && !sectionDirty}<Check data-icon="inline-start" /> Saved{:else}Save{/if}</Button>{/if}</header>
+    <span class="visually-hidden" role="status" aria-live="polite">{feedback}</span>
     {#if failure}<Alert.Root variant="destructive"><CircleAlert /><Alert.Title>Settings action failed</Alert.Title><Alert.Description>{failure}</Alert.Description></Alert.Root>{/if}
 
     {#if section.id === 'chat'}
       <section class="settings-group" aria-labelledby="chat-reasoning-status" id="setting-reasoning-blocks"><h2 id="chat-reasoning-status">Reasoning</h2><Field.FieldGroup>
-        <Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Thinking status</Field.FieldTitle><Field.FieldDescription>Use a plain label, Hermes personality text, or no transient label. Completed reasoning remains available in its disclosure.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={thinkingStatusDraft} disabled={!profileConnectionId}><Select.Trigger aria-label="Thinking status">{thinkingStatusDraft === 'personality' ? 'Hermes personality' : thinkingStatusDraft === 'plain' ? 'Plain' : 'Hidden'}</Select.Trigger><Select.Content><Select.Group><Select.Label>Thinking status</Select.Label><Select.Item value="plain" label="Plain">Plain</Select.Item><Select.Item value="personality" label="Hermes personality">Hermes personality</Select.Item><Select.Item value="hidden" label="Hidden">Hidden</Select.Item></Select.Group></Select.Content></Select.Root></Field.Field>
-      </Field.FieldGroup><Button size="sm" variant="outline" disabled={!profileConnectionId || saving} onclick={() => void saveThinkingStatus()}>Save chat display</Button></section>
+        <Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Thinking status</Field.FieldTitle><Field.FieldDescription>Use a plain label, Hermes personality text, or no transient label. Completed reasoning remains available in its disclosure.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={thinkingStatusDraft} disabled={!profileConnectionId}><Select.Trigger aria-label="Thinking status">{thinkingStatusDraft === 'personality' ? 'Hermes personality' : thinkingStatusDraft === 'plain' ? 'Plain' : 'Hidden'}</Select.Trigger><Select.Content><Select.Group><Select.Item value="plain" label="Plain">Plain</Select.Item><Select.Item value="personality" label="Hermes personality">Hermes personality</Select.Item><Select.Item value="hidden" label="Hidden">Hidden</Select.Item></Select.Group></Select.Content></Select.Root></Field.Field>
+      </Field.FieldGroup></section>
     {:else if section.id === 'appearance'}
       <section class="settings-group" aria-labelledby="appearance-mode">
         <h2 id="appearance-mode">Theme</h2>
         <Field.FieldGroup>
           <Field.Field orientation="horizontal" id="setting-theme"><Field.FieldContent><Field.FieldTitle>Mode</Field.FieldTitle><Field.FieldDescription>Apply light or dark luminance independently from the color palette.</Field.FieldDescription></Field.FieldContent><ToggleGroup.Root type="single" bind:value={draft.appearance.mode} aria-label="Theme mode"><ToggleGroup.Item value="light">Light</ToggleGroup.Item><ToggleGroup.Item value="dark">Dark</ToggleGroup.Item><ToggleGroup.Item value="system">System</ToggleGroup.Item></ToggleGroup.Root></Field.Field>
-          <Field.Field orientation="horizontal" id="setting-palette"><Field.FieldContent><Field.FieldTitle>Palette</Field.FieldTitle><Field.FieldDescription>Meta themes replace neutral and accent primitives while preserving semantic roles.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={draft.appearance.palette}><Select.Trigger aria-label="Palette">{draft.appearance.palette}</Select.Trigger><Select.Content><Select.Group><Select.Label>Palettes</Select.Label>{#each ['mono', 'nous', 'midnight', 'ember', 'cyberpunk', 'slate'] as palette}<Select.Item value={palette} label={palette}>{palette}</Select.Item>{/each}</Select.Group></Select.Content></Select.Root></Field.Field>
+          <Field.Field orientation="horizontal" id="setting-palette"><Field.FieldContent><Field.FieldTitle>Palette</Field.FieldTitle><Field.FieldDescription>Meta themes replace neutral and accent primitives while preserving semantic roles.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={draft.appearance.palette}><Select.Trigger aria-label="Palette">{draft.appearance.palette}</Select.Trigger><Select.Content><Select.Group>{#each ['mono', 'nous', 'midnight', 'ember', 'cyberpunk', 'slate'] as palette}<Select.Item value={palette} label={palette}>{palette}</Select.Item>{/each}</Select.Group></Select.Content></Select.Root></Field.Field>
         </Field.FieldGroup>
       </section>
       <section class="settings-group" aria-labelledby="appearance-conversation"><h2 id="appearance-conversation">Agent conversations</h2><Field.FieldGroup>
@@ -141,7 +164,7 @@
       <section class="settings-group" aria-labelledby="appearance-contextual-controls" id="setting-contextual-controls"><h2 id="appearance-contextual-controls">Contextual controls</h2><Field.FieldGroup>
         <Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Approval mode location</Field.FieldTitle><Field.FieldDescription>Default to the status line; show it in the composer only when this profile benefits from an in-flow control.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={profileControlDraft.approval} disabled={!profileConnectionId}><Select.Trigger aria-label="Approval mode location">{profileControlDraft.approval}</Select.Trigger><Select.Content><Select.Group>{#each [['status', 'Status line'], ['composer', 'Composer'], ['both', 'Both'], ['hidden', 'Hidden']] as option}<Select.Item value={option[0]} label={option[1]}>{option[1]}</Select.Item>{/each}</Select.Group></Select.Content></Select.Root></Field.Field>
         <Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Context usage location</Field.FieldTitle><Field.FieldDescription>Use the status line for token capacity; the composer can retain its compact radial control when explicitly enabled.</Field.FieldDescription></Field.FieldContent><Select.Root type="single" bind:value={profileControlDraft.context} disabled={!profileConnectionId}><Select.Trigger aria-label="Context usage location">{profileControlDraft.context}</Select.Trigger><Select.Content><Select.Group>{#each [['status', 'Status line'], ['composer', 'Composer'], ['both', 'Both'], ['hidden', 'Hidden']] as option}<Select.Item value={option[0]} label={option[1]}>{option[1]}</Select.Item>{/each}</Select.Group></Select.Content></Select.Root></Field.Field>
-      </Field.FieldGroup><Button size="sm" variant="outline" disabled={!profileConnectionId || saving} onclick={() => void saveProfileControlDisplay()}>Save profile controls</Button></section>
+      </Field.FieldGroup></section>
     {:else if section.id === 'notifications'}
       <section class="settings-group" aria-labelledby="notification-settings"><h2 id="notification-settings">Notifications</h2><Field.FieldGroup>
         <Field.Field orientation="horizontal" id="setting-system-notifications"><Field.FieldContent><Field.FieldTitle>System notifications</Field.FieldTitle><Field.FieldDescription>Notify when an agent completes or needs attention.</Field.FieldDescription></Field.FieldContent><Switch bind:checked={draft.notifications.system} aria-label="System notifications" /></Field.Field>
@@ -150,7 +173,7 @@
       </Field.FieldGroup></section>
     {:else if section.id === 'providers'}
       <Alert.Root><ShieldCheck /><Alert.Title>Hermes remains the primary runtime</Alert.Title><Alert.Description>Provider policy is a read-only layer over Hermes. It can restrict choices but never becomes a second inference path.</Alert.Description></Alert.Root>
-      <section class="settings-group" aria-labelledby="hermes-provider-heading" id="setting-hermes-providers"><h2 id="hermes-provider-heading">Hermes providers</h2><div class="setting-row"><span><strong>Model provider accounts</strong><small>Authentication and default model selection remain owned by Hermes.</small></span><Button variant="outline" size="sm" disabled={!availableSurfaces.includes('models')} onclick={() => onsettingsaction({ kind: 'surface', surface: 'models' })}>Manage <ExternalLink data-icon="inline-end" /></Button></div></section>
+      <section class="settings-group" aria-labelledby="hermes-provider-heading" id="setting-hermes-providers"><h2 id="hermes-provider-heading">Hermes providers</h2><div class="setting-row"><span><strong>Model provider accounts</strong><small>Authentication and default model selection are managed in Model settings.</small></span></div></section>
       <section class="settings-group" aria-labelledby="openrouter-heading" id="setting-openrouter"><h2 id="openrouter-heading">OpenRouter policy</h2><Field.FieldGroup>
         <Field.Field><Field.FieldLabel for="openrouter-key">Inference key</Field.FieldLabel><Input id="openrouter-key" type="password" bind:value={openRouterApiKey} oninput={() => { failure = ''; feedback = ''; }} placeholder={openRouterConfigured ? 'Stored securely — enter to replace' : 'sk-or-v1-…'} autocomplete="new-password" /><Field.FieldDescription>Read the effective model inventory and restrictions for the OpenRouter account used by Hermes. Companion never uses this key as a second chat runtime.</Field.FieldDescription></Field.Field>
         {#if openRouterConfigured}<Field.Field orientation="horizontal"><Field.FieldContent><Field.FieldTitle>Stored credential</Field.FieldTitle><Field.FieldDescription>Remove the encrypted OpenRouter key when these settings are saved.</Field.FieldDescription></Field.FieldContent><Switch bind:checked={clearOpenRouterApiKey} aria-label="Remove stored OpenRouter key" /></Field.Field>{/if}
@@ -169,16 +192,19 @@
       </Field.FieldGroup></section>
       <section class="settings-group" aria-labelledby="about-heading" id="setting-version"><h2 id="about-heading">Hermes Companion</h2><div class="setting-row"><span><strong>Development build</strong><small>This owner-only build is qualified directly on macOS.</small></span></div></section>
     {:else}
-      <section class="settings-group" aria-labelledby="section-options"><h2 id="section-options">{section.label}</h2>
-        {#each section.items as item (item.id)}<div class="setting-row" id={`setting-${item.id}`}><span><strong>{item.label}</strong><small>{item.description}</small></span><Button size="sm" variant="ghost" disabled={!actionAvailable(item.action)} title={item.unavailableReason ?? undefined} onclick={() => item.action && onsettingsaction(item.action)}>{item.action ? 'Configure' : 'Unavailable'}</Button></div>{/each}
-      </section>
+      {#each section.items.filter((item) => item.action?.kind !== 'surface') as item (item.id)}
+        <section class="settings-group" id={`setting-${item.id}`} aria-labelledby={`setting-title-${item.id}`}><h2 id={`setting-title-${item.id}`}>{item.label}</h2><div class="setting-row"><span><strong>{item.label}</strong><small>{item.description}</small>{#if item.unavailableReason}<em>{item.unavailableReason}</em>{/if}</span>{#if item.action?.kind === 'connection'}<Button size="sm" variant="outline" disabled={!connectionAvailable} onclick={() => onsettingsaction({ kind: 'connection' })}>Edit connection</Button>{/if}</div></section>
+      {/each}
+      {#each embeddedSurfaces as surface (surface)}
+        <section class="settings-group capability-settings" aria-label={`${section.label} settings`}><OperationsCenter family={surface} embedded /></section>
+      {/each}
     {/if}
   </article>
 </div>
 
 <style>
   .settings-scroll { min-block-size: 0; max-block-size: 100%; block-size: 100%; overflow-y: auto; overflow-x: clip; overscroll-behavior: contain; scrollbar-gutter: stable; }
-  .settings-page { inline-size: min(100% - 2rem, 48rem); display: grid; gap: 1.25rem; margin-inline: auto; padding: clamp(3.5rem, 8vh, 5.5rem) 0 4rem; }
+  .settings-page { inline-size: min(100% - 2rem, 52rem); display: grid; gap: 1.25rem; margin-inline: auto; padding: clamp(2rem, 5vh, 3.5rem) 0 4rem; }
   .settings-page-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
   h1, h2, p { margin: 0; } h1 { font-size: 1rem; font-weight: 650; } h2 { color: var(--muted-foreground); font-size: .67rem; font-weight: 590; }
   .settings-page-header p { margin-block-start: .2rem; color: var(--muted-foreground); font-size: .7rem; }
@@ -186,11 +212,10 @@
   .settings-group > :global([data-slot='field-group']), .settings-group > .setting-row { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); padding: .25rem .7rem; }
   .settings-group :global([data-slot='field']) { min-block-size: 3.7rem; padding-block: .55rem; }
   .settings-group :global([data-slot='field'] + [data-slot='field']) { border-block-start: 1px solid var(--border); }
-  .settings-group :global([data-slot='field-title']), .setting-row strong { font-size: .71rem; font-weight: 590; }
-  .settings-group :global([data-slot='field-description']), .setting-row small { color: var(--muted-foreground); font-size: .63rem; line-height: 1.4; }
+  .settings-group :global([data-slot='field-title']), .setting-row strong { color: color-mix(in oklab, var(--foreground), var(--muted-foreground) 12%); font-size: var(--type-small); font-weight: 590; }
+  .settings-group :global([data-slot='field-description']), .setting-row small, .setting-row em { color: color-mix(in oklab, var(--foreground), var(--muted-foreground) 58%); font-size: var(--type-small); font-style: normal; line-height: 1.45; }
   .settings-group :global([data-slot='select-trigger']) { min-inline-size: 8.5rem; }
   .setting-row { min-block-size: 3.7rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; scroll-margin-block: 5rem; }
-  .setting-row + .setting-row { margin-block-start: 1px; }
   .setting-row span { min-inline-size: 0; display: grid; gap: .12rem; }
   .provider-actions { display: flex; align-items: center; gap: .45rem; }
   .credential-state { margin-inline-start: auto; color: var(--muted-foreground); font-size: .63rem; }
@@ -204,8 +229,8 @@
   .guardrail-row small, .guardrail-row > span, .policy-empty { color: var(--muted-foreground); font-size: .63rem; line-height: 1.4; }
   .guardrail-row > span { flex: none; max-inline-size: 45%; text-align: end; }
   .policy-empty { padding: .65rem .7rem; }
-  .settings-feedback { display: flex; align-items: center; gap: .35rem; color: var(--status-positive); font-size: .68rem; }
-  .settings-feedback :global(svg) { inline-size: .8rem; }
+  .capability-settings { gap: 0; }
+  .visually-hidden { position: absolute !important; inline-size: 1px !important; block-size: 1px !important; margin: -1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
   :global(.spin) { animation: spin 1s linear infinite; } @keyframes spin { to { rotate: 1turn; } }
   @media (max-width: 48rem) { .settings-page { inline-size: min(100% - 1rem, 48rem); } }
 </style>

@@ -40,7 +40,7 @@ describe('shell resilience', () => {
     expect(page).not.toContain('operationalCapabilities');
   });
 
-  it('keeps deferred and hypothetical controls out of settings navigation', async () => {
+  it('keeps deferred controls out and embeds runtime configuration in the settings shell', async () => {
     const [registry, settings, page] = await Promise.all([
       source('lib/settings/settings-registry.ts'),
       source('lib/components/companion/settings-page.svelte'),
@@ -53,12 +53,20 @@ describe('shell resilience', () => {
     expect(registry).not.toContain("id: 'artificial-analysis'");
     expect(settings).not.toContain('Coming later');
     expect(settings).not.toContain("onopensurface('updates')");
-    expect(settings).not.toContain('OperationsCenter');
+    expect(settings).toContain("import OperationsCenter from './operations-center.svelte'");
+    expect(settings).toContain('<OperationsCenter family={surface} embedded />');
+    const operations = await source('lib/components/companion/operations-center.svelte');
+    expect(operations).toContain(".operations.embedded[data-family='models'] .settings-form { display: none; }");
+    expect(operations).toContain('class="settings-list provider-list"');
+    expect(operations).not.toContain('<Table.Caption>Hermes model-provider authentication status.</Table.Caption>');
+    expect(operations).toContain('const credentialRows = $derived');
+    expect(operations).toContain('No credentials are stored for this Hermes profile.');
     expect(page).not.toContain("chooseSurface('updates')");
     expect(page).not.toContain("runCommandCenterAction('update')");
     expect(page).not.toContain('Hermes API</Button>');
     expect(settings).not.toContain('onopensurface(section.id)');
     expect(page).not.toContain("supported ?? (surface === 'model' ? 'models' : 'profiles')");
+    expect(settings).toContain('if (settingsScroll) settingsScroll.scrollTop = 0');
   });
 
   it('namespaces sidebar disclosure state from dependency-wide expanded selectors', async () => {
@@ -67,15 +75,15 @@ describe('shell resilience', () => {
     expect(sidebarCategory).not.toContain('data-expanded={expanded}');
   });
 
-  it('releases dialog hit targets as soon as the shared primitive closes', async () => {
+  it('animates dialogs out without retaining their hit targets', async () => {
     const [content, overlay] = await Promise.all([
       source('lib/components/ui/dialog/dialog-content.svelte'),
       source('lib/components/ui/dialog/dialog-overlay.svelte')
     ]);
     for (const primitive of [content, overlay]) {
-      expect(primitive).toContain('data-[state=closed]:hidden');
-      expect(primitive).not.toContain('data-[state=closed]:animate-out');
-      expect(primitive).not.toContain('data-closed:animate-out');
+      expect(primitive).toContain('data-[state=closed]:animate-out');
+      expect(primitive).toContain('data-[state=closed]:pointer-events-none');
+      expect(primitive).not.toContain('data-[state=closed]:hidden');
     }
     expect(content).toContain('{#snippet child({ props })}');
   });
@@ -138,6 +146,99 @@ describe('shell resilience', () => {
     expect(conversation).toContain('min-h-0 flex-1 overflow-x-clip overflow-y-auto overscroll-contain');
     expect(settings).toContain('overflow-y: auto');
     expect(settings).toContain('overscroll-behavior: contain');
+  });
+
+  it('keeps constrained tab rails reachable from their leading edge', async () => {
+    const [tabsList, dock] = await Promise.all([
+      source('lib/components/ui/tabs/tabs-list.svelte'),
+      source('lib/components/companion/workspace-dock.svelte')
+    ]);
+
+    expect(tabsList).toContain('items-center justify-start');
+    expect(tabsList).not.toContain('items-center justify-center');
+    expect(dock).toContain('overflow: auto hidden');
+    expect(dock).toContain('overscroll-behavior-inline: contain');
+    expect(dock).toContain("data-overflow-start={tabOverflowStart}");
+    expect(dock).toContain("data-overflow-end={tabOverflowEnd}");
+    expect(dock).toContain('-webkit-mask-image: linear-gradient');
+    expect(dock).not.toContain('background: linear-gradient(to right');
+  });
+
+  it('lets right-panel empty states consume the available body without phantom tracks', async () => {
+    const [dock, terminal] = await Promise.all([
+      source('lib/components/companion/workspace-dock.svelte'),
+      source('lib/components/companion/terminal-split.svelte')
+    ]);
+    expect(dock).toContain('class="browser-body"');
+    expect(dock).toContain('.browser-start { block-size: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr);');
+    expect(dock).toContain('.browser-context :global([data-slot=\'empty\']) { min-block-size: 100%; }');
+    expect(terminal).toContain('data-has-terminals={sessions.length > 0}');
+    expect(terminal).toContain(".terminal-split[data-layout='sidebar'][data-has-terminals='true']");
+    expect(terminal).toContain("{#if layout === 'bottom' || sessions.length}");
+  });
+
+  it('offers every right-panel surface plus the existing worktree manager', async () => {
+    const [dock, page, worktrees] = await Promise.all([
+      source('lib/components/companion/workspace-dock.svelte'),
+      source('routes/+page.svelte'),
+      source('lib/components/companion/project-dialog.svelte')
+    ]);
+    expect(dock).toContain('{#each surfaceOptions as option');
+    expect(dock).toContain('<span>Worktrees</span>');
+    expect(dock).toContain('onopenworktrees');
+    expect(page).toContain("onopenworktrees={() => openProjectDialog('worktrees')}");
+    expect(page).toContain('mode={projectDialogMode}');
+    expect(dock).toContain('display: flex; flex-wrap: wrap; justify-content: center;');
+    expect(worktrees).toContain('class="worktree-list"');
+    expect(worktrees).not.toContain('<Table.Root>');
+  });
+
+  it('uses one dirty-state save action and named settings categories', async () => {
+    const [settings, navigation] = await Promise.all([
+      source('lib/components/companion/settings-page.svelte'),
+      source('lib/components/companion/settings-navigation.svelte')
+    ]);
+    expect(settings).toContain('disabled={saving || !sectionDirty}');
+    expect(settings).toContain('Saved{:else}Save');
+    expect(settings).not.toContain('Save chat display');
+    expect(settings).not.toContain('Save profile controls');
+    expect(settings).not.toContain('class="settings-feedback"');
+    expect(navigation).toContain("{ id: 'primary', label: 'App' }");
+    expect(navigation).toContain("{ id: 'runtime', label: 'Hermes' }");
+    expect(navigation).toContain("{ id: 'system', label: 'System' }");
+  });
+
+  it('uses Inter for interface copy, JetBrains Mono for data, and one compact type scale', async () => {
+    const [css, sidebar] = await Promise.all([
+      source('app.css'),
+      source('lib/components/companion/sidebar-category.svelte')
+    ]);
+    expect(css).toContain("--font-body: 'Inter Variable'");
+    expect(css).toContain('--font-ui: var(--font-body);');
+    expect(css).toContain("--font-mono: 'JetBrains Mono Variable'");
+    expect(css).not.toContain("@fontsource-variable/manrope");
+    expect(css).toContain('--type-menu: var(--type-caption);');
+    expect(css).toContain('--type-status: var(--type-caption);');
+    expect(sidebar).not.toContain('text-transform: uppercase');
+    expect(sidebar).toContain('font-family: var(--font-mono);');
+  });
+
+  it('pins optional pane status, body, and footer content to stable rows', async () => {
+    const [agents, terminal] = await Promise.all([
+      source('lib/components/companion/agents-dock.svelte'),
+      source('lib/components/companion/terminal-split.svelte')
+    ]);
+
+    expect(agents).toContain('.agents-summary { grid-row: 1;');
+    expect(agents).toContain('.agents-error { grid-row: 2;');
+    expect(agents).toContain(':global(.agents-empty) { grid-row: 3;');
+    expect(agents).toContain('.agents-layout { grid-row: 3;');
+    expect(agents).toContain('.agents-limits { grid-row: 4;');
+    expect(terminal).toContain('.terminal-header { grid-row: 1;');
+    expect(terminal).toContain('.terminal-error { grid-row: 2;');
+    expect(terminal).toContain('.terminal-output { grid-row: 3;');
+    expect(terminal).toContain('.terminal-tabs { grid-row: 4;');
+    expect(terminal).toContain(':global(.terminal-empty) { grid-row: 3;');
   });
 
   it('gives the new-chat work surface the pane width instead of the reading-column width', async () => {
@@ -365,7 +466,7 @@ describe('shell resilience', () => {
     expect(navigation).toContain('class="session-detail-title"');
     expect(navigation).toContain('--detail-secondary: var(--muted-foreground)');
     expect(navigation).not.toContain('side="right" align="start" sideOffset={8}');
-    expect(navigation).toContain('font-size: .7rem');
+    expect(navigation).toContain('font-size: var(--type-small)');
   });
 
   it('does not create worktrees as a side effect of selecting a session', async () => {

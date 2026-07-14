@@ -13,7 +13,8 @@
   let title = $state('');
   let pending = $state('');
   let error = $state('');
-  $effect(() => { if (open && session) title = session.title; });
+  let confirmingDelete = $state(false);
+  $effect(() => { if (open && session) { title = session.title; confirmingDelete = false; } });
 
   async function rename() {
     if (!session || !title.trim()) return; pending = 'rename'; error = '';
@@ -36,10 +37,14 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>Session actions</Dialog.Title><Dialog.Description>Rename or permanently delete the selected Hermes session.</Dialog.Description></Dialog.Header>
+  <Dialog.Content class="sm:max-w-md"><Dialog.Header><Dialog.Title>{confirmingDelete ? 'Delete session permanently?' : 'Session actions'}</Dialog.Title><Dialog.Description>{confirmingDelete ? `Delete “${session?.title ?? 'this session'}” and its Hermes history. This cannot be undone.` : 'Rename, archive, or delete the selected Hermes session.'}</Dialog.Description></Dialog.Header>
     {#if error}<Alert.Root variant="destructive"><CircleAlert /><Alert.Title>Session action failed</Alert.Title><Alert.Description>{error}</Alert.Description></Alert.Root>{/if}
-    <form class="rename-form" onsubmit={(event) => { event.preventDefault(); void rename(); }}><Field.FieldGroup><Field.Field><Field.FieldLabel for="session-title">Title</Field.FieldLabel><Input id="session-title" name="session-title" bind:value={title} required /></Field.Field></Field.FieldGroup><Button type="submit" disabled={Boolean(pending)}>Save title</Button></form>
-    <Dialog.Footer>{#if archiveAvailable}<Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{session?.archived ? 'Restore session' : 'Archive session'}</Button>{/if}<Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>Delete permanently</Button></Dialog.Footer>
+    {#if confirmingDelete}
+      <Dialog.Footer><Button type="button" variant="outline" disabled={Boolean(pending)} onclick={() => (confirmingDelete = false)}>Cancel</Button><Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={remove}>{pending === 'delete' ? 'Deleting…' : 'Delete permanently'}</Button></Dialog.Footer>
+    {:else}
+      <form class="rename-form" onsubmit={(event) => { event.preventDefault(); void rename(); }}><Field.FieldGroup><Field.Field><Field.FieldLabel for="session-title">Title</Field.FieldLabel><Input id="session-title" name="session-title" bind:value={title} required /></Field.Field></Field.FieldGroup><Button type="submit" disabled={Boolean(pending)}>Save title</Button></form>
+      <Dialog.Footer>{#if archiveAvailable}<Button type="button" variant="outline" disabled={Boolean(pending)} onclick={archive}>{session?.archived ? 'Restore session' : 'Archive session'}</Button>{/if}<Button type="button" variant="destructive" disabled={Boolean(pending)} onclick={() => (confirmingDelete = true)}>Delete permanently</Button></Dialog.Footer>
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
 

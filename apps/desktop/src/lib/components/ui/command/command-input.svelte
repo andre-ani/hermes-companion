@@ -18,7 +18,7 @@
 			{value}
 			data-slot="command-input"
 			class={cn(
-				"w-full text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
+				"w-full text-[length:var(--type-menu)] outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
 				className
 			)}
 			{...restProps}
@@ -28,7 +28,7 @@
 			{/snippet}
 		</CommandPrimitive.Input>
 		<InputGroup.Addon>
-			<SearchIcon class="size-4 shrink-0 opacity-50" />
+			<SearchIcon class="size-3.5 shrink-0 opacity-50" />
 		</InputGroup.Addon>
 	</InputGroup.Root>
 </div>
