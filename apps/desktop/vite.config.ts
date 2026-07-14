@@ -4,5 +4,6 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
+  ssr: { noExternal: ['@hermes/shared', '@hermes-companion/hermes-adapter'] },
   server: { host: '127.0.0.1', port: 5400, strictPort: true }
 });

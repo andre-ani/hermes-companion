@@ -4,12 +4,13 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["apps/*", "packages/*", "vendor/hermes-agent/apps/shared"],
   "scripts": {
     "dev": "npm run dev --workspace=@hermes-companion/desktop",
     "build": "npm run build --workspace=@hermes-companion/desktop && npm run build --workspace=@hermes-companion/bridge",
     "check": "npm run check --workspace=@hermes-companion/desktop && npm run check --workspace=@hermes-companion/bridge",
-    "test": "vitest run"
+    "test": "vitest run tests",
+    "architecture:check": "node scripts/check-architecture.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

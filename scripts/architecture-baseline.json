@@ -1,0 +1,8 @@
+{
+  "rawRpcCallSites": {
+    "apps/desktop/scripts/electron-uat.mjs": 4,
+    "apps/desktop/src/lib/client/remote/sessions.remote.ts": 2,
+    "apps/desktop/src/lib/server/hermes-chat-runs.ts": 9,
+    "apps/desktop/src/lib/server/hermes-serve-runs.ts": 8
+  }
+}
