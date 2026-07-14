@@ -50,7 +50,7 @@
   import { SerializedSelectionQueue, ViewOwnership, viewResourceKey, type ViewOwner } from '$lib/view-ownership';
   import { workspaceLayoutOwnerKey, WorkspaceLayoutPreferences, type CapabilityAvailability, type CapabilityFamily, type ChatAttachmentInput, type ChatTurnApproval, type ContextUsage, type DesktopPreferences, type GatewayStatus, type HermesGitWorktree, type HermesMessage, type HermesProfile, type HermesProjectTree, type HermesProjectTreeNode, type HermesSession, type ModelInfo, type OpenRouterPolicyOverview, type ProfileUiPreferences, type ProjectBinding, type SessionPresentation, type SessionTreeFilter, type WorkspaceDockTab, type WorkspaceLayoutOwner, type WorktreeRecord } from '@hermes-companion/contracts';
   import type { HermesDurableSessionId } from '@hermes-companion/hermes-adapter';
-  import { ArrowLeft, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Command as CommandIcon, FolderGit2, GitCommitHorizontal, GitPullRequest, KeyRound, Maximize2, MessageCircle, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RotateCcw, RotateCw, Search, Server, Settings, Shapes, ShieldCheck, Sparkles, SquarePen, SquareTerminal, Stethoscope, Timer, Upload, Wifi, Wrench } from '@lucide/svelte';
+  import { ArrowLeft, Bot, Check, ChevronDown, CircleAlert, Clock3, Command as CommandIcon, FolderGit2, GitCommitHorizontal, GitPullRequest, KeyRound, Maximize2, MessageCircle, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RotateCcw, RotateCw, Search, Server, Settings, Shapes, ShieldCheck, Sparkles, SquarePen, SquareTerminal, Stethoscope, Timer, Upload, Wifi, Wrench } from '@lucide/svelte';
 
   type Overview = { gateway: GatewayStatus; capabilities: CapabilityAvailability[]; connections: GatewayStatus['connection'][]; profiles: HermesProfile[]; activeProfileId: string; sessions: HermesSession[]; models: ModelInfo[]; projects: ProjectBinding[]; projectTree: HermesProjectTree; worktrees: WorktreeRecord[]; pinnedSessionIds: string[]; audit: Array<{ id: string; action: string; subject: string; at: string }>; approvalMode: 'manual' | 'smart' | 'off' | null };
   const workspaceOverviewQuery = getWorkspaceOverview({});
@@ -300,8 +300,7 @@
   const composerSuggestions: ComposerPromptAction[] = [
     { id: 'release', label: 'Trace a release regression', description: 'Inspect, isolate, and checkpoint the safest fix', prompt: 'Trace the release regression and stop at a safe checkpoint before making broad changes.' },
     { id: 'architecture', label: 'Map an implementation', description: 'Turn an idea into a concrete technical plan', prompt: '/plan Map the implementation for ' },
-    { id: 'project-review', label: 'Review a project', description: 'Use @ to attach a project or profile', prompt: 'Review @' },
-    { id: 'automation', label: 'Create an automation', description: 'Design a recurring Hermes job', prompt: 'Design a recurring automation that ' }
+    { id: 'project-review', label: 'Review a project', description: 'Use @ to attach a project or profile', prompt: 'Review @' }
   ];
   const composerBranchOptions = $derived((overview?.worktrees ?? []).filter((worktree) => worktree.connectionId === overview?.gateway.connection.id && worktree.profileId === overview?.activeProfileId && worktree.projectId === activeProject?.id).map((worktree) => ({ id: worktree.worktreeId, label: worktree.branch, description: overview?.sessions.find((session) => session.id === worktree.threadId)?.title ?? worktree.path })));
 
@@ -1471,8 +1470,6 @@
   <div class="shell-chrome" aria-label="Application controls">
     <div class="chrome-leading">
       <Button size="icon-sm" variant="ghost" onclick={toggleSidebar} aria-controls="session-sidebar" aria-expanded={sidebarVisible} aria-label={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'} title={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}>{#if sidebarVisible}<PanelLeftClose />{:else}<PanelLeftOpen />{/if}</Button>
-      <Button size="icon-sm" variant="ghost" disabled aria-label="Back" title="No previous location"><ChevronLeft /></Button>
-      <Button size="icon-sm" variant="ghost" disabled aria-label="Forward" title="No next location"><ChevronRight /></Button>
     </div>
     <div class="chrome-trailing">
       <Button size="icon-sm" variant={inspectorMode === 'focused' ? 'secondary' : 'ghost'} disabled={!workspaceLayoutInteractive || !inspectorVisible} onclick={toggleInspectorFocus} aria-controls="workspace-inspector" aria-pressed={inspectorMode === 'focused'} aria-label={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'} title={inspectorMode === 'focused' ? 'Restore right panel' : 'Focus right panel'}>{#if inspectorMode === 'focused'}<Minimize2 />{:else}<Maximize2 />{/if}</Button>
@@ -1707,7 +1704,7 @@
   .shell-boot[data-visible='true'] { opacity: 1; visibility: visible; transition-delay: 0s; }
   .shell-boot :global(svg) { inline-size: 1rem; block-size: 1rem; animation: shell-boot-pulse var(--motion-status-cycle) var(--ease-standard) infinite; }
   .companion-shell[data-shell-presented='true'] { animation: shell-content-enter var(--motion-enter) var(--ease-standard) both; }
-  .companion-shell { --window-safe-inline-start: .5rem; --shell-sidebar-track: var(--shell-sidebar-width); position: relative; block-size: 100dvh; display: grid; grid-template-columns: var(--shell-sidebar-track) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--shell-status-height); overflow: hidden; background: var(--background); transition: --shell-sidebar-track var(--motion-layout) var(--ease-standard); }
+  .companion-shell { --window-safe-inline-start: .5rem; --shell-sidebar-track: min(var(--shell-sidebar-width), max(14rem, calc(30dvi - 4rem))); --shell-inspector-track: min(var(--shell-inspector-width), max(17.5rem, calc(37dvi - 4.5rem))); position: relative; block-size: 100dvh; display: grid; grid-template-columns: var(--shell-sidebar-track) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--shell-status-height); overflow: hidden; background: var(--background); transition: --shell-sidebar-track var(--motion-layout) var(--ease-standard); }
   .companion-shell[data-sidebar-visible='false'] { --shell-sidebar-track: 0px; }
   .companion-shell[data-preview-fullscreen='true'] { grid-template-columns: minmax(0, 1fr); }
   .companion-shell[data-preview-fullscreen='true'] > .session-sidebar, .companion-shell[data-preview-fullscreen='true'] .workspace-header { display: none; }
@@ -1720,11 +1717,11 @@
   .shell-chrome :global(button) { position: relative; z-index: 1; pointer-events: auto; -webkit-app-region: no-drag; color: var(--muted-foreground); }
   .shell-chrome :global(button:hover:not(:disabled)), .shell-chrome :global(button:focus-visible) { color: var(--foreground); }
   .shell-chrome :global(button:disabled) { opacity: .3; }
-  .session-sidebar { grid-column: 1; grid-row: 1; inline-size: var(--shell-sidebar-width); min-inline-size: var(--shell-sidebar-width); min-block-size: 0; justify-self: start; display: flex; flex-direction: column; overflow: hidden; padding-block-start: var(--shell-titlebar-height); border-inline-end: 1px solid var(--border); background: var(--surface-pane); opacity: 1; translate: 0; transition: opacity var(--motion-enter) var(--ease-standard), translate var(--motion-layout) var(--ease-standard); will-change: translate; }
+  .session-sidebar { grid-column: 1; grid-row: 1; inline-size: var(--shell-sidebar-track); min-inline-size: var(--shell-sidebar-track); min-block-size: 0; justify-self: start; display: flex; flex-direction: column; overflow: hidden; padding-block-start: var(--shell-titlebar-height); border-inline-end: 1px solid var(--border); background: var(--surface-pane); opacity: 1; translate: 0; transition: opacity var(--motion-enter) var(--ease-standard), translate var(--motion-layout) var(--ease-standard); will-change: translate; }
   .sidebar-header { min-block-size: 3.4rem; display: flex; align-items: center; justify-content: space-between; gap: .25rem; padding: .2rem .5rem .35rem; }
   .sidebar-header > :global([data-slot='dropdown-menu-trigger']) { min-inline-size: 0; inline-size: fit-content; flex: 0 1 auto; }
   .sidebar-header :global(button), .workspace-header :global(button) { -webkit-app-region: no-drag; }
-  :global(.profile-switcher) { inline-size: fit-content; max-inline-size: calc(var(--shell-sidebar-width) - 3.4rem); justify-content: flex-start; gap: .35rem; block-size: 2.55rem; padding-inline: .55rem .45rem; border-radius: .85rem; text-align: start; }
+  :global(.profile-switcher) { inline-size: fit-content; max-inline-size: calc(var(--shell-sidebar-track) - 3.4rem); justify-content: flex-start; gap: .35rem; block-size: 2.55rem; padding-inline: .55rem .45rem; border-radius: .85rem; text-align: start; }
   :global(.profile-switcher strong) { min-inline-size: 0; overflow: hidden; font-size: 1.05rem; font-weight: 625; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
   :global(.profile-switcher .profile-chevron) { inline-size: .9rem; opacity: 0; translate: -.15rem 0; transition: opacity var(--motion-fast) ease, translate var(--motion-fast) ease; }
   :global(.profile-switcher:hover .profile-chevron), :global(.profile-switcher:focus-visible .profile-chevron), :global(.profile-switcher[data-state='open'] .profile-chevron) { opacity: 1; translate: 0 0; }
@@ -1732,15 +1729,15 @@
   .sidebar-actions { display: grid; gap: .05rem; padding: .05rem .45rem .35rem; } .sidebar-actions :global(button) { justify-content: flex-start; }
   kbd { margin-inline-start: auto; color: var(--muted-foreground); font-family: var(--font-mono); font-size: .62rem; }
   .pane-resizer { position: absolute; z-index: 24; touch-action: none; background: transparent; }
-  .sidebar-resizer { inset-block: 0 var(--shell-status-height); inset-inline-start: calc(var(--shell-sidebar-width) - .3rem); inline-size: .6rem; cursor: col-resize; }
+  .sidebar-resizer { inset-block: 0 var(--shell-status-height); inset-inline-start: calc(var(--shell-sidebar-track) - .3rem); inline-size: .6rem; cursor: col-resize; }
   .companion-shell[data-sidebar-visible='false'] .sidebar-resizer { opacity: 0; pointer-events: none; }
   .workspace { grid-column: 2; grid-row: 1; min-inline-size: 0; min-block-size: 0; block-size: 100%; overflow: hidden; }
-  .workspace-panes { position: relative; min-inline-size: 0; min-block-size: 0; block-size: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--shell-inspector-width); overflow: hidden; transition: grid-template-columns var(--motion-layout) var(--ease-standard); }
+  .workspace-panes { position: relative; min-inline-size: 0; min-block-size: 0; block-size: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--shell-inspector-track); overflow: hidden; transition: grid-template-columns var(--motion-layout) var(--ease-standard); }
   .workspace-panes[data-inspector-visible='false'] { grid-template-columns: minmax(0, 1fr) 0; }
   .workspace-panes[data-inspector-visible='true'][data-inspector-mode='focused'] { grid-template-columns: 0 minmax(0, 1fr); }
-  .inspector-resizer { inset-block: 0; inset-inline-end: calc(var(--shell-inspector-width) - .3rem); inline-size: .6rem; cursor: col-resize; }
+  .inspector-resizer { inset-block: 0; inset-inline-end: calc(var(--shell-inspector-track) - .3rem); inline-size: .6rem; cursor: col-resize; }
   .workspace-panes[data-inspector-visible='false'] .inspector-resizer { opacity: 0; pointer-events: none; }
-  .inspector-pane { grid-column: 2; inline-size: var(--shell-inspector-width); min-inline-size: var(--shell-inspector-width); min-block-size: 0; justify-self: end; overflow: hidden; border-inline-start: 1px solid var(--border); background: var(--surface-pane); opacity: 1; translate: 0; transition: opacity var(--motion-enter) var(--ease-standard), translate var(--motion-layout) var(--ease-standard); will-change: translate; }
+  .inspector-pane { grid-column: 2; inline-size: var(--shell-inspector-track); min-inline-size: var(--shell-inspector-track); min-block-size: 0; justify-self: end; overflow: hidden; border-inline-start: 1px solid var(--border); background: var(--surface-pane); opacity: 1; translate: 0; transition: opacity var(--motion-enter) var(--ease-standard), translate var(--motion-layout) var(--ease-standard); will-change: translate; }
   .workspace-panes[data-inspector-mode='focused'] .inspector-pane { inline-size: 100%; min-inline-size: 0; border-inline-start-color: transparent; }
   .workspace-panes[data-inspector-mode='focused'] .primary-pane { opacity: 0; pointer-events: none; }
   .workspace-panes[data-inspector-visible='false'] .inspector-pane { border-inline-start-color: transparent; opacity: 0; translate: 100% 0; pointer-events: none; }

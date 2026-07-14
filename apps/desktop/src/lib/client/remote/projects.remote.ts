@@ -44,6 +44,10 @@ const SessionWorktreeBindingInput = z.object({
   sessionId: z.string().min(1)
 });
 
+class WorkspaceOwnerChanged extends Error {
+  constructor(message: string) { super(message); this.name = 'WorkspaceOwnerChanged'; }
+}
+
 function activeWorkspaceOwnerMatches(connectionId: string, profileId: string) {
   const client = getActiveHermesClient();
   const connection = client.executionContext().connection;
@@ -75,7 +79,7 @@ async function attachVerifiedHermesWorktree(
   const branch = verified.target.branch;
   if (!branch) throw new Error('The verified Hermes worktree has no branch.');
   const currentOwner = activeWorkspaceOwnerMatches(input.connectionId, input.profileId);
-  if (!currentOwner.ok || currentOwner.client !== client) throw new Error(currentOwner.ok ? 'The active Hermes connection changed before the worktree could be attached.' : currentOwner.reason);
+  if (!currentOwner.ok || currentOwner.client !== client) throw new WorkspaceOwnerChanged(currentOwner.ok ? 'The active Hermes connection changed before the worktree could be attached.' : currentOwner.reason);
   const attached = await invokeExecutionHost<Partial<WorktreeRecord> & { path: string; branch: string }>({
     localCapability: 'git.worktree.attach',
     localInput: { repositoryPath: verified.resolved.repositoryPath, worktreePath: verified.target.path, branch },
@@ -290,7 +294,12 @@ export const resolveSessionWorkspaceTarget = command(SessionWorktreeBindingInput
 
   const verified = await findVerifiedHermesWorktree(input, owner.client).catch(() => ({ ok: false as const, reason: 'Hermes could not verify this session worktree.' }));
   if (!verified.ok) return SessionWorkspaceTarget.parse({ available: false, reason: verified.reason });
-  return SessionWorkspaceTarget.parse({ available: true, worktree: await attachVerifiedHermesWorktree(input, verified, owner.client) });
+  try {
+    return SessionWorkspaceTarget.parse({ available: true, worktree: await attachVerifiedHermesWorktree(input, verified, owner.client) });
+  } catch (cause) {
+    if (cause instanceof WorkspaceOwnerChanged) return SessionWorkspaceTarget.parse({ available: false, reason: cause.message });
+    throw cause;
+  }
 });
 
 export const getWorktreeCommitMetadata = query(z.object({ worktreeId: z.string().min(1) }), async ({ worktreeId }) => {

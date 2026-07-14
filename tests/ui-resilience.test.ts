@@ -124,9 +124,9 @@ describe('shell resilience', () => {
     expect(page).toContain('transition: --shell-sidebar-track var(--motion-layout) var(--ease-standard)');
     expect(page).toContain("max(.75rem, calc(var(--window-safe-inline-start) + var(--shell-chrome-leading-width) - var(--shell-sidebar-track)))");
     expect(page).not.toContain("[data-sidebar-visible='false'] .workspace-header");
-    expect(page).toContain('inline-size: var(--shell-sidebar-width); min-inline-size: var(--shell-sidebar-width)');
+    expect(page).toContain('inline-size: var(--shell-sidebar-track); min-inline-size: var(--shell-sidebar-track)');
     expect(page).toContain("translate: -100% 0");
-    expect(page).toContain('inline-size: var(--shell-inspector-width); min-inline-size: var(--shell-inspector-width)');
+    expect(page).toContain('inline-size: var(--shell-inspector-track); min-inline-size: var(--shell-inspector-track)');
     expect(page).toContain('translate: 100% 0');
   });
 

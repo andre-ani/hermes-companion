@@ -16,8 +16,10 @@ const execFileAsync = promisify(execFile);
 const repositoryDir = await mkdtemp(join(tmpdir(), 'hermes-companion-repo-'));
 const worktreeDir = join(stateDir, 'worktrees', 'uat-thread');
 const nativeWorktreeDir = join(stateDir, 'worktrees', 'native-uat-thread');
+const lifecycleProjectDir = join(stateDir, 'lifecycle-project');
 const remoteDir = join(stateDir, 'uat-origin.git');
 const fakeBin = join(stateDir, 'bin');
+const fakePullRequestState = join(stateDir, 'fake-pull-request-created');
 await execFileAsync('git', ['init', '-b', 'main', repositoryDir]);
 await execFileAsync('git', ['-C', repositoryDir, 'config', 'user.name', 'Hermes Companion UAT']);
 await execFileAsync('git', ['-C', repositoryDir, 'config', 'user.email', 'uat@example.invalid']);
@@ -28,10 +30,36 @@ await execFileAsync('git', ['init', '--bare', remoteDir]);
 await execFileAsync('git', ['-C', repositoryDir, 'remote', 'add', 'origin', remoteDir]);
 await execFileAsync('git', ['-C', repositoryDir, 'push', '-u', 'origin', 'main']);
 await mkdir(dirname(worktreeDir), { recursive: true });
+await mkdir(lifecycleProjectDir, { recursive: true });
 await execFileAsync('git', ['-C', repositoryDir, 'worktree', 'add', '-b', 'companion/uat-session', worktreeDir, 'HEAD']);
 await rm(join(dirname(repositoryDir), '.hermes-worktrees', 'uat-project'), { recursive: true, force: true });
 await mkdir(fakeBin, { recursive: true });
-await writeFile(join(fakeBin, 'gh'), '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "gh version 2.0.0"\n  exit 0\nfi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then\n  exit 0\nfi\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then\n  echo "{\\"number\\":1,\\"title\\":\\"UAT draft pull request\\",\\"url\\":\\"https://github.example.test/hermes-companion/uat/pull/1\\",\\"state\\":\\"OPEN\\",\\"isDraft\\":true,\\"reviewDecision\\":null}"\n  exit 0\nfi\nif [ "$1" = "pr" ] && [ "$2" = "create" ]; then\n  echo "https://github.example.test/hermes-companion/uat/pull/1"\n  exit 0\nfi\necho "unsupported gh invocation" >&2\nexit 1\n');
+await writeFile(join(fakeBin, 'gh'), `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gh version 2.0.0"
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  exit 0
+fi
+branch="$(git branch --show-current | tr '/' '_')"
+state_path="${fakePullRequestState}.$branch"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  if [ ! -f "$state_path" ]; then
+    echo "no pull requests found" >&2
+    exit 1
+  fi
+  echo '{"number":1,"title":"UAT draft pull request","url":"https://github.example.test/hermes-companion/uat/pull/1","state":"OPEN","isDraft":true,"reviewDecision":null}'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  touch "$state_path"
+  echo "https://github.example.test/hermes-companion/uat/pull/1"
+  exit 0
+fi
+echo "unsupported gh invocation" >&2
+exit 1
+`);
 await chmod(join(fakeBin, 'gh'), 0o755);
 const port = await new Promise((resolve, reject) => { const server = createNetServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const address = server.address(); const value = typeof address === 'object' && address ? address.port : 0; server.close((error) => error ? reject(error) : resolve(value)); }); });
 
@@ -53,6 +81,12 @@ const unavailableSession = {
 };
 let unavailableSessionDeleted = false;
 let createdSessionCount = 0;
+let activeProjectId = 'uat-project';
+let uatProjects = [{ id: 'uat-project', name: 'Electron UAT', repositoryPath: repositoryDir, archived: false }];
+const projectListPayload = (project) => ({ id: project.id, name: project.name, folders: [{ path: project.repositoryPath }], primary_path: project.repositoryPath, archived: project.archived });
+const projectTreePayload = (project) => project.id === 'uat-project'
+  ? { id: project.id, label: project.name, path: project.repositoryPath, archived: project.archived, sessionCount: 1, previewSessions: [session], repos: [{ id: 'uat-repository', label: project.name, path: project.repositoryPath, sessionCount: 1, groups: [{ id: 'uat-worktree', label: 'companion/uat-session', path: worktreeDir, totalCount: 1, sessions: [session], isMain: false }] }] }
+  : { id: project.id, label: project.name, path: project.repositoryPath, archived: project.archived, sessionCount: 0, previewSessions: [], repos: [{ id: `${project.id}-repository`, label: project.name, path: project.repositoryPath, sessionCount: 0, groups: [] }] };
 const dashboardSessionToken = 'uat-dashboard-session-token-1234';
 const serveSocket = new WebSocketServer({ port: 0, host: '127.0.0.1' });
 await new Promise((resolve, reject) => { serveSocket.once('listening', resolve); serveSocket.once('error', reject); });
@@ -85,9 +119,30 @@ serveSocket.on('connection', (socket) => socket.on('message', (raw) => {
     return;
   }
   if (request.method === 'delegation.status') return reply({ active: [], paused: false, max_spawn_depth: 3, max_concurrent_children: 4 });
-  if (request.method === 'projects.list') return reply({ active_id: 'uat-project', projects: [{ id: 'uat-project', name: 'Electron UAT', folders: [{ path: repositoryDir }], primary_path: repositoryDir, archived: false }] });
-  if (request.method === 'projects.tree') return reply({ active_id: 'uat-project', scoped_session_ids: ['uat-session'], projects: [{ id: 'uat-project', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, previewSessions: [session], repos: [{ id: 'uat-repository', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, groups: [{ id: 'uat-worktree', label: 'companion/uat-session', path: worktreeDir, totalCount: 1, sessions: [session], isMain: false }] }] }] });
-  if (request.method === 'projects.project_sessions') return reply({ project: { id: 'uat-project', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, previewSessions: [session], repos: [{ id: 'uat-repository', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, groups: [{ id: 'uat-worktree', label: 'companion/uat-session', path: worktreeDir, totalCount: 1, sessions: [session], isMain: false }] }] } });
+  if (request.method === 'projects.list') return reply({ active_id: activeProjectId, projects: uatProjects.map(projectListPayload) });
+  if (request.method === 'projects.tree') return reply({ active_id: activeProjectId, scoped_session_ids: ['uat-session'], projects: uatProjects.map(projectTreePayload) });
+  if (request.method === 'projects.project_sessions') return reply({ project: uatProjects.find((project) => project.id === request.params?.project_id) ? projectTreePayload(uatProjects.find((project) => project.id === request.params?.project_id)) : null });
+  if (request.method === 'projects.create') {
+    const project = { id: 'uat-lifecycle-project', name: request.params?.name || 'UAT lifecycle project', repositoryPath: request.params?.primary_path, archived: false };
+    uatProjects = [...uatProjects.filter((item) => item.id !== project.id), project]; activeProjectId = project.id;
+    return reply({ project: projectListPayload(project) });
+  }
+  if (request.method === 'projects.update') {
+    const project = uatProjects.find((item) => item.id === request.params?.id);
+    if (!project) return socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { message: 'Project fixture not found.' } }));
+    project.name = request.params?.name || project.name;
+    return reply({ project: projectListPayload(project) });
+  }
+  if (request.method === 'projects.archive') {
+    const project = uatProjects.find((item) => item.id === request.params?.id);
+    if (!project) return socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { message: 'Project fixture not found.' } }));
+    project.archived = !request.params?.restore;
+    return reply({ ok: true });
+  }
+  if (request.method === 'projects.delete') {
+    uatProjects = uatProjects.filter((item) => item.id !== request.params?.id); activeProjectId = 'uat-project';
+    return reply({ ok: true });
+  }
   socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { message: `Unsupported UAT Serve method: ${request.method}.` } }));
 }));
 const mockHermes = createHttpServer(async (request, response) => {
@@ -232,7 +287,8 @@ await writeFile(join(stateDir, 'state.json'), JSON.stringify({
   worktrees: [{ connectionId: 'default', profileId: 'default', projectId: 'uat-project', worktreeId: 'uat-worktree', path: worktreeDir, branch: 'companion/uat-session', threadId: 'uat-session', parentWorktreeId: null, createdAt: '2026-07-11T09:00:00.000Z' }], previews: [], audit: []
 }, null, 2));
 
-const child = spawn(electron, [desktop], { cwd: desktop, stdio: 'inherit', env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}`, HERMES_COMPANION_UAT: '1', HERMES_COMPANION_UAT_REPORT_DIR: reportDir, HERMES_COMPANION_UAT_BROWSER_URL: `${mockHermesUrl}/uat/browser`, HERMES_COMPANION_UAT_REPOSITORY: repositoryDir, HERMES_COMPANION_UAT_WORKTREE: nativeWorktreeDir, HERMES_COMPANION_RENDERER_URL: `http://127.0.0.1:${port}`, HERMES_API_URL: `http://127.0.0.1:${port}`, HERMES_CONTROL_URL: mockHermesUrl, HERMES_CONTROL_TOKEN: dashboardSessionToken, HERMES_SERVE_WS_URL: `ws://127.0.0.1:${serveAddress.port}`, COMPANION_DATA_DIR: stateDir } });
+const packagedExecutable = process.env.HERMES_COMPANION_UAT_EXECUTABLE?.trim();
+const child = spawn(packagedExecutable || electron, packagedExecutable ? [] : [desktop], { cwd: desktop, stdio: 'inherit', env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}`, HERMES_COMPANION_UAT: '1', HERMES_COMPANION_UAT_REPORT_DIR: reportDir, HERMES_COMPANION_UAT_BROWSER_URL: `${mockHermesUrl}/uat/browser`, HERMES_COMPANION_UAT_REPOSITORY: repositoryDir, HERMES_COMPANION_UAT_WORKTREE: nativeWorktreeDir, HERMES_COMPANION_UAT_LIFECYCLE_PROJECT: lifecycleProjectDir, HERMES_COMPANION_RENDERER_URL: `http://127.0.0.1:${port}`, HERMES_API_URL: `http://127.0.0.1:${port}`, HERMES_CONTROL_URL: mockHermesUrl, HERMES_CONTROL_TOKEN: dashboardSessionToken, HERMES_SERVE_WS_URL: `ws://127.0.0.1:${serveAddress.port}`, COMPANION_DATA_DIR: stateDir } });
 const timer = setTimeout(() => child.kill('SIGKILL'), 135_000);
 const exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => resolve(code ?? 1)); }); clearTimeout(timer);
 await new Promise((resolve) => mockHermes.close(resolve));

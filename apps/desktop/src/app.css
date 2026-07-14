@@ -107,7 +107,7 @@
   --shell-inspector-width: 22rem;
   --composer-max-inline-size: 56rem;
   --titlebar-safe-inline-start: 6.25rem;
-  --shell-chrome-leading-width: 7rem;
+  --shell-chrome-leading-width: 2rem;
   --shell-chrome-trailing-width: 5rem;
   --motion-fast: 120ms;
   --motion-ambient: 1200ms;

@@ -333,7 +333,12 @@ async function dispatchNative(capability, input = {}) {
     case 'browser.close': closeBrowserView(input.ownerKey, input.browserLeaseId); return { ok: true };
     case 'browser.devtools': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); if (view && !view.webContents.isDestroyed()) view.webContents.openDevTools({ mode: 'detach' }); return { ok: Boolean(view) }; }
     case 'browser.bounds': {
-      requireBrowserClaim(input.ownerKey, input.browserLeaseId);
+      validBrowserIdentity(input.ownerKey, input.browserLeaseId);
+      // Bounds are disposable presentation updates. A renderer can already
+      // have queued one when an owner transition releases the old lease, so a
+      // stale update must converge as a no-op instead of surfacing a server
+      // error after the new owner is active.
+      if (!sameBrowserIdentity(input.ownerKey, input.browserLeaseId)) return { ok: false, attached: false };
       browserViewController.bounds = { x: input.x, y: input.y, width: input.width, height: input.height };
       setViewBounds();
       return { ok: true, attached: Boolean(mainWindow && browserViewController.view && mainWindow.contentView.children.includes(browserViewController.view)) };
@@ -639,18 +644,111 @@ async function runAutomatedUat(window) {
       const loaded = await window.webContents.executeJavaScript(`document.querySelector('.review-content')?.innerText?.includes('Unstaged review evidence')`);
       if (loaded) break; await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    const openedVisibleRevert = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-tabs button')].find((item) => item.textContent?.trim() === 'Revert'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Revert file')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const confirmedVisibleRevert = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Revert file'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const reverted = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('README.md reverted.')`);
+      if (reverted) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await dispatchNative('file.write', { root: uiWorktreePath, path: 'README.md', content: '# Electron UAT\n\nUnstaged review evidence\n' });
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Refresh Git review"]')?.click()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const loaded = await window.webContents.executeJavaScript(`!document.querySelector('[aria-label="Refresh Git review"]')?.disabled && [...document.querySelectorAll('.review-stack nav button')].some((item) => item.textContent?.includes('README.md'))`);
+      if (loaded) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.review-stack nav button')].find((item) => item.textContent?.includes('README.md'))?.click()`);
     const stagedReviewFile = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-tabs button')].find((item) => item.textContent?.trim() === 'Stage file'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const staged = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('README.md staged.') && !document.querySelector('[aria-label="Refresh Git review"]')?.disabled`);
       if (staged) break; await new Promise((resolve) => setTimeout(resolve, 150));
     }
     const openedStagedTab = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim().startsWith('Staged')); tab?.click(); return Boolean(tab); })()`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const selectedStagedFile = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-stack nav button')].find((item) => item.textContent?.includes('README.md')); button?.click(); return Boolean(button); })()`);
+    const unstagedReviewFile = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.review-tabs button')].find((item) => item.textContent?.trim() === 'Unstage file'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const unstaged = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('README.md unstaged.')`);
+      if (unstaged) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const visibleUnstageStatus = await git(uiWorktreePath, ['status', '--porcelain=v1', '--', 'README.md']);
+    await dispatchNative('git.stage', { cwd: uiWorktreePath, paths: ['README.md'] });
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Refresh Git review"]')?.click()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const staged = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[data-slot="tabs-trigger"]')].some((item) => /^Staged\s+1$/.test(item.textContent?.trim() ?? ''))`);
+      if (staged) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim().startsWith('Staged'))?.click()`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('.review-stack nav button')].find((item) => item.textContent?.includes('README.md'))?.click()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const loaded = await window.webContents.executeJavaScript(`document.querySelector('.review-content[data-state="active"]')?.innerText?.includes('Unstaged review evidence')`);
+      if (loaded) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     const reviewEvidence = await window.webContents.executeJavaScript(`(() => ({ heading: document.querySelector('#review-heading')?.textContent?.trim() ?? null, tabs: [...document.querySelectorAll('[data-slot="tabs-trigger"]')].map((item) => item.textContent?.trim()), diff: document.querySelector('.review-content[data-state="active"]')?.innerText ?? document.querySelector('.review-content')?.innerText ?? '', rightPanelVisible: document.querySelector('[aria-label="Hide right panel"]') !== null }))()`);
-    checks.codeReview = returnedToLinkedSession && openedInspector && openedChanges && refreshedReview && selectedReviewFile && stagedReviewFile && openedStagedTab && reviewEvidence.rightPanelVisible && reviewEvidence.heading === 'companion/uat-session' && reviewEvidence.tabs.some((tab) => tab?.startsWith('Staged')) && /Unstaged review evidence/.test(reviewEvidence.diff);
+    checks.codeReview = returnedToLinkedSession && openedInspector && openedChanges && refreshedReview && selectedReviewFile && openedVisibleRevert && confirmedVisibleRevert && stagedReviewFile && openedStagedTab && selectedStagedFile && unstagedReviewFile && /^ M README\.md$/m.test(visibleUnstageStatus.stdout) && reviewEvidence.rightPanelVisible && reviewEvidence.heading === 'companion/uat-session' && reviewEvidence.tabs.some((tab) => tab?.startsWith('Staged')) && /Unstaged review evidence/.test(reviewEvidence.diff);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const reviewScreenshot = await window.webContents.capturePage();
     await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-review.png'), reviewScreenshot.toPNG());
+    const openedCommitTab = await window.webContents.executeJavaScript(`(() => { const tab = [...document.querySelectorAll('[data-slot="tabs-trigger"]')].find((item) => item.textContent?.trim() === 'Commit'); tab?.click(); return Boolean(tab); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const mounted = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#commit-message'))`);
+      if (mounted) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const enteredVisibleCommitMessage = await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#commit-message'); if (!(input instanceof HTMLTextAreaElement)) return false; input.value = 'UAT visible coding loop'; input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const enabled = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.commit-panel button')].find((item) => item.textContent?.trim() === 'Commit'); return button instanceof HTMLButtonElement && !button.disabled; })()`);
+      if (enabled) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const submittedVisibleCommit = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.commit-panel button')].find((item) => item.textContent?.trim() === 'Commit'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const committed = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('Committed ')`);
+      if (committed) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const visibleCommitNotice = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.trim() ?? null`);
+    const submittedVisiblePush = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.commit-panel button')].find((item) => item.textContent?.trim() === 'Push'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const pushed = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('Branch pushed.')`);
+      if (pushed) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const visiblePushNotice = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.trim() ?? null`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.commit-panel button')].find((item) => item.textContent?.trim() === 'Create draft PR'); return button instanceof HTMLButtonElement && !button.disabled; })()`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const openedVisiblePullRequest = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.commit-panel button')].find((item) => item.textContent?.trim() === 'Create draft PR'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const opened = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#pull-request-title'))`);
+      if (opened) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const submittedVisiblePullRequest = await window.webContents.executeJavaScript(`(() => { const title = document.querySelector('#pull-request-title'); const body = document.querySelector('#pull-request-body'); if (!(title instanceof HTMLInputElement) || !(body instanceof HTMLTextAreaElement)) return false; title.value = 'UAT draft pull request'; title.dispatchEvent(new Event('input', { bubbles: true })); body.value = 'Created through the visible packaged coding loop.'; body.dispatchEvent(new Event('input', { bubbles: true })); const dialog = title.closest('[data-slot="dialog-content"]'); const button = [...(dialog?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.trim() === 'Create draft PR'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const created = await window.webContents.executeJavaScript(`document.querySelector('.review-notice')?.textContent?.includes('Draft pull request created.') && Boolean(document.querySelector('.review-summary a'))`);
+      if (created) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const visibleGitEvidence = await window.webContents.executeJavaScript(`(() => ({ notice: document.querySelector('.review-notice')?.textContent?.trim() ?? null, pullRequestText: document.querySelector('.review-summary a')?.textContent?.trim() ?? null, pullRequestUrl: document.querySelector('.review-summary a')?.href ?? null, commitPanelVisible: document.querySelector('.commit-panel')?.getAttribute('data-state') === 'active' }))()`);
+    const visibleCommitMetadata = await git(uiWorktreePath, ['log', '-1', '--format=%s']);
+    const visibleRemoteBranch = await git(uiWorktreePath, ['ls-remote', 'origin', 'refs/heads/companion/uat-session']);
+    checks.visibleGitLifecycle = openedCommitTab && enteredVisibleCommitMessage && submittedVisibleCommit && /Committed /.test(visibleCommitNotice ?? '') && submittedVisiblePush && visiblePushNotice === 'Branch pushed.' && openedVisiblePullRequest && submittedVisiblePullRequest && visibleGitEvidence.notice === 'Draft pull request created.' && visibleGitEvidence.pullRequestText === 'Draft PR #1' && visibleGitEvidence.pullRequestUrl === 'https://github.example.test/hermes-companion/uat/pull/1' && visibleGitEvidence.commitPanelVisible && visibleCommitMetadata.stdout.trim() === 'UAT visible coding loop' && /refs\/heads\/companion\/uat-session/.test(visibleRemoteBranch.stdout);
+    const shipScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-ship.png'), shipScreenshot.toPNG());
+    window.setSize(960, 680);
+    window.webContents.debugger.attach('1.3');
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const constrainedEvidence = await window.webContents.executeJavaScript(`(() => { const rect = (selector) => { const node = document.querySelector(selector); if (!(node instanceof HTMLElement)) return null; const value = node.getBoundingClientRect(); return { left: value.left, right: value.right, top: value.top, bottom: value.bottom, width: value.width, height: value.height }; }; const viewport = { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight }; const sidebar = rect('.session-sidebar'); const primary = rect('.primary-pane'); const inspector = rect('.inspector-pane'); const leading = rect('.chrome-leading'); const trailing = rect('.chrome-trailing'); const composer = rect('.composer-dock'); const inViewport = (value) => Boolean(value && value.left >= 0 && value.top >= 0 && value.right <= viewport.width && value.bottom <= viewport.height); return { viewport, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, motionFast: getComputedStyle(document.documentElement).getPropertyValue('--motion-fast').trim(), sidebar, primary, inspector, leading, trailing, composer, noHorizontalOverflow: viewport.scrollWidth <= viewport.width, noVerticalOverflow: viewport.scrollHeight <= viewport.height, panesDoNotOverlap: Boolean(sidebar && primary && inspector && sidebar.right <= primary.left && primary.right <= inspector.left), chromeDoesNotOverlap: Boolean(leading && trailing && leading.right <= trailing.left), composerReachable: inViewport(composer) && Boolean(primary && composer && composer.left >= primary.left && composer.right <= primary.right), reviewReachable: Boolean(document.querySelector('#review-heading') && inspector && inspector.width > 0) }; })()`);
+    const constrainedSidebarEvidence = await window.webContents.executeJavaScript(`(() => { const sidebar = document.querySelector('.session-sidebar')?.getBoundingClientRect(); const inspect = (node) => { const value = node.getBoundingClientRect(); return { text: node.textContent?.trim() ?? '', left: value.left, right: value.right, width: value.width, visible: Boolean(sidebar && value.width > 0 && value.left >= sidebar.left && value.right <= sidebar.right) }; }; return { profile: [...document.querySelectorAll('.profile-switcher strong')].map(inspect), primaryActions: [...document.querySelectorAll('.sidebar-actions button')].map(inspect), sessionTitles: [...document.querySelectorAll('.session-title')].map(inspect) }; })()`);
+    const constrainedSidebarLabelsReachable = [...constrainedSidebarEvidence.profile, ...constrainedSidebarEvidence.primaryActions, ...constrainedSidebarEvidence.sessionTitles].every((item) => item.visible);
+    checks.constrainedReducedMotion = constrainedEvidence.viewport.width === 960 && constrainedEvidence.viewport.height === 680 && constrainedEvidence.reducedMotion && (constrainedEvidence.motionFast === '0s' || constrainedEvidence.motionFast === '0ms') && constrainedEvidence.noHorizontalOverflow && constrainedEvidence.noVerticalOverflow && constrainedEvidence.panesDoNotOverlap && constrainedEvidence.chromeDoesNotOverlap && constrainedEvidence.composerReachable && constrainedEvidence.reviewReachable && constrainedSidebarLabelsReachable;
+    const constrainedScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-constrained.png'), constrainedScreenshot.toPNG());
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] });
+    window.webContents.debugger.detach();
+    window.setSize(1500, 940);
+    await new Promise((resolve) => setTimeout(resolve, 150));
     const openedCenterTerminal = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('.status-bar button[aria-label="Show terminal"]'); button?.click(); return Boolean(button) && !button.disabled; })()`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const terminalEvidence = await window.webContents.executeJavaScript(`(() => ({ open: document.querySelector('.primary-layout')?.getAttribute('data-terminal-open') === 'true', heading: document.querySelector('[aria-label="Worktree terminals"]')?.textContent?.trim() ?? null, addTerminal: document.querySelector('[aria-label="Add terminal"]') instanceof HTMLButtonElement }))()`);
@@ -824,8 +922,101 @@ async function runAutomatedUat(window) {
     checks.unavailableHistoryLifecycle = selectedUnavailableSession && openedUnavailableActions && renamedUnavailableSession && reopenedForArchive && archivedUnavailableSession && openedArchivedFilter && selectedArchivedFilter && selectedArchivedSession && openedRestoreActions && restoredUnavailableSession && reopenedArchivedFilter && returnedToActiveFilter && selectedRestoredSession && openedDeleteActions && deletedUnavailableSession && !unavailableLifecycleEvidence.titlePresent && !unavailableLifecycleEvidence.dialogOpen;
     const createdSession = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.sidebar-actions button')].find((item) => item.innerText.includes('New chat')); button?.click(); return Boolean(button); })()`);
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, header: document.querySelector('.header-context')?.textContent?.trim() ?? '', welcome: document.querySelector('.welcome-state')?.innerText ?? '', prompt: document.querySelector('#chat-prompt')?.value ?? null }))()`);
+    const sessionEvidence = await window.webContents.executeJavaScript(`(() => ({ title: document.title, header: document.querySelector('.header-context')?.textContent?.trim() ?? '', welcome: document.querySelector('.welcome-state')?.innerText ?? '', prompt: document.querySelector('#chat-prompt')?.value ?? null, deadHistoryControls: [...document.querySelectorAll('button')].filter((button) => ['Back', 'Forward'].includes(button.getAttribute('aria-label'))).map((button) => button.getAttribute('aria-label')) }))()`);
     checks.newChat = createdSession && /New conversation/.test(sessionEvidence.header) && /Ask Hermes anything/.test(sessionEvidence.welcome) && sessionEvidence.prompt === '';
+    checks.deadPrimaryAffordances = sessionEvidence.deadHistoryControls.length === 0 && !/Create an automation|Design a recurring Hermes job/.test(sessionEvidence.welcome);
+    const lifecycleProjectPath = process.env.HERMES_COMPANION_UAT_LIFECYCLE_PROJECT;
+    if (!lifecycleProjectPath) throw new Error('The visible project lifecycle fixture is missing.');
+    const openedCommandForProject = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[title="Command center"]'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[data-slot="command-item"]')].some((item) => item.textContent?.includes('Add project or folder'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedAddProject = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[data-slot="command-item"]')].find((candidate) => candidate.textContent?.includes('Add project or folder')); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#repository-path'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const filledProjectDialog = await window.webContents.executeJavaScript(`(() => { const pathInput = document.querySelector('#repository-path'); const nameInput = document.querySelector('#project-name'); if (!(pathInput instanceof HTMLInputElement) || !(nameInput instanceof HTMLInputElement)) return false; const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; setter?.call(pathInput, ${JSON.stringify(process.env.HERMES_COMPANION_UAT_LIFECYCLE_PROJECT ?? '')}); pathInput.dispatchEvent(new Event('input', { bubbles: true })); setter?.call(nameInput, 'Lifecycle project'); nameInput.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    const submittedProject = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('.project-form button')].find((item) => item.textContent?.trim() === 'Add project'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`!document.querySelector('#repository-path')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const openedProjectGrouping = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[aria-label="Group and filter sessions"]'); button?.click(); return Boolean(button); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim().startsWith('Grouping'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedGroupingSubmenu = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim().startsWith('Grouping')); if (!item) return false; item.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' })); item.click(); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim() === 'Projects')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const selectedProjectGrouping = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Projects'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Lifecycle project')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const openedProjectContextForRename = await window.webContents.executeJavaScript(`(() => { const row = [...document.querySelectorAll('.project-heading')].find((item) => item.textContent?.includes('Lifecycle project')); if (!(row instanceof HTMLElement)) return false; const rect = row.getBoundingClientRect(); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + 20, clientY: rect.top + 10 })); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim() === 'Rename')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedProjectRename = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Rename'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`Boolean(document.querySelector('#project-action-name'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const submittedProjectRename = await window.webContents.executeJavaScript(`(() => { const input = document.querySelector('#project-action-name'); if (!(input instanceof HTMLInputElement)) return false; const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; setter?.call(input, 'Renamed lifecycle project'); input.dispatchEvent(new Event('input', { bubbles: true })); const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Save name'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true; })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const openedProjectContextForArchive = await window.webContents.executeJavaScript(`(() => { const row = [...document.querySelectorAll('.project-heading')].find((item) => item.textContent?.includes('Renamed lifecycle project')); if (!(row instanceof HTMLElement)) return false; const rect = row.getBoundingClientRect(); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + 20, clientY: rect.top + 10 })); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim() === 'Archive')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const archivedProject = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Archive'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const hidden = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project')`);
+      if (hidden) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="Group and filter sessions"]')?.click()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim().startsWith('Show'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedShowSubmenu = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim().startsWith('Show')); if (!item) return false; item.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' })); item.click(); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.includes('Active and archived'))`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const includedArchivedProjects = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.includes('Active and archived')); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const visible = await window.webContents.executeJavaScript(`[...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project')`);
+      if (visible) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const projectLifecycleScreenshot = await window.webContents.capturePage();
+    await fsp.writeFile(path.join(uatReportDir, 'hermes-companion-project-lifecycle.png'), projectLifecycleScreenshot.toPNG());
+    const openedProjectContextForDelete = await window.webContents.executeJavaScript(`(() => { const row = [...document.querySelectorAll('.project-heading')].find((item) => item.textContent?.includes('Renamed lifecycle project')); if (!(row instanceof HTMLElement)) return false; const rect = row.getBoundingClientRect(); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + 20, clientY: rect.top + 10 })); return true; })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim() === 'Delete…')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const openedProjectDelete = await window.webContents.executeJavaScript(`(() => { const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Delete…'); item?.click(); return Boolean(item); })()`);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const ready = await window.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Delete project')`);
+      if (ready) break; await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const deletedProject = await window.webContents.executeJavaScript(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Delete project'); button?.click(); return Boolean(button) && !button.disabled; })()`);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const gone = await window.webContents.executeJavaScript(`![...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project') && !document.querySelector('#project-action-name')`);
+      if (gone) break; await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const projectLifecycleEvidence = await window.webContents.executeJavaScript(`(() => ({ presentation: document.querySelector('.tree-label')?.textContent?.trim() ?? null, deleted: ![...document.querySelectorAll('.project-name')].some((item) => item.textContent?.trim() === 'Renamed lifecycle project'), dialogClosed: !document.querySelector('#project-action-name') }))()`);
+    checks.visibleProjectLifecycle = openedCommandForProject && openedAddProject && filledProjectDialog && submittedProject && openedProjectGrouping && openedGroupingSubmenu && selectedProjectGrouping && openedProjectContextForRename && openedProjectRename && submittedProjectRename && openedProjectContextForArchive && archivedProject && openedShowSubmenu && includedArchivedProjects && openedProjectContextForDelete && openedProjectDelete && deletedProject && projectLifecycleEvidence.deleted && projectLifecycleEvidence.dialogClosed;
     const uatBrowserIdentity = { ownerKey: 'uat:browser', browserLeaseId: crypto.randomUUID() };
     claimBrowserView(uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
     await openGeneralBrowser(browserFixtureUrl, uatBrowserIdentity.ownerKey, uatBrowserIdentity.browserLeaseId);
@@ -876,10 +1067,10 @@ async function runAutomatedUat(window) {
     checks.nativeProjectInitialization = initializedProject.defaultBranch === 'main' && initializedProjectGit.stdout.trim() === 'true';
     checks.nativeFiles = initialFiles.some((item) => item.name === 'README.md') && readme.content === '# Electron UAT\n' && searchResults.some((item) => item.path === 'uat-note.txt' && item.line === 1) && nativeWorkspaceEvidence.gitStatusContainsCreatedFile;
     checks.nativePty = nativeWorkspaceEvidence.terminalBoundToWorktree;
-    checks.nativeGitLifecycle = /Add UAT note/.test(initialCommit.stdout) && /Amend UAT note/.test(amendedCommit.stdout) && commitMetadata.subject === 'Amend UAT note' && typeof pushed.stdout === 'string' && typeof pushed.stderr === 'string' && githubStatus.installed && githubStatus.authenticated && existingPullRequest?.number === 1 && existingPullRequest?.isDraft === true && pullRequest.url === 'https://github.example.test/hermes-companion/uat/pull/1';
+    checks.nativeGitLifecycle = /Add UAT note/.test(initialCommit.stdout) && /Amend UAT note/.test(amendedCommit.stdout) && commitMetadata.subject === 'Amend UAT note' && typeof pushed.stdout === 'string' && typeof pushed.stderr === 'string' && githubStatus.installed && githubStatus.authenticated && existingPullRequest === null && pullRequest.url === 'https://github.example.test/hermes-companion/uat/pull/1';
     await dispatchNative('git.worktree.remove', { repositoryPath, worktreePath, force: true });
     const ok = Object.values(checks).every(Boolean);
-    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, unavailableLifecycleEvidence, sessionEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
+    await writeUatReport({ ok, platform: process.platform, rendererUrl, checks, evidence, chatEvidence, contextEvidence, reviewEvidence, visibleGitEvidence: { ...visibleGitEvidence, commitNotice: visibleCommitNotice, pushNotice: visiblePushNotice, commitSubject: visibleCommitMetadata.stdout.trim(), remoteBranch: visibleRemoteBranch.stdout.trim() }, constrainedEvidence: { ...constrainedEvidence, sidebarLabels: constrainedSidebarEvidence }, terminalEvidence, editorEvidence, browserAfterRapidReactivate, secondaryLayoutEvidence, primaryRestoredEvidence, reloadEvidence, capabilityEvidence, settingsEvidence, unavailableLifecycleEvidence, sessionEvidence, projectLifecycleEvidence, browserEvidence, nativeWorkspaceEvidence, capturedAt: new Date().toISOString() }); clearTimeout(timeout); app.exit(ok ? 0 : 1);
   } catch (error) { clearTimeout(timeout); await writeUatReport({ ok: false, platform: process.platform, rendererUrl, error: error instanceof Error ? error.message : String(error), capturedAt: new Date().toISOString() }); app.exit(1); }
 }
 

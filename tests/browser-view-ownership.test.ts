@@ -170,6 +170,7 @@ describe('native BrowserView ownership', () => {
     const main = await readFile(new URL('main.cjs', electronSource), 'utf8');
     expect.soft(main.includes("require('./browser-view-geometry.cjs')"), 'native bounds must be normalized by the Electron owner').toBe(true);
     const boundsHandler = main.slice(main.indexOf("case 'browser.bounds'"), main.indexOf("case 'browser.layout'"));
+    expect.soft(/!sameBrowserIdentity\(input\.ownerKey,\s*input\.browserLeaseId\)[\s\S]*?return\s*\{\s*ok:\s*false,\s*attached:\s*false\s*\}/.test(boundsHandler), 'queued bounds from a released lease must converge as a harmless no-op').toBe(true);
     expect.soft(/setViewBounds\(\)/.test(boundsHandler), 'bounds updates must flow through the native geometry owner').toBe(true);
     const setBounds = functionSource(main, 'setViewBounds');
     expect.soft(/normalizeBrowserBounds\(bounds,\s*\[width,\s*height\]\)/.test(setBounds), 'renderer geometry must be clamped to BrowserWindow content size').toBe(true);
