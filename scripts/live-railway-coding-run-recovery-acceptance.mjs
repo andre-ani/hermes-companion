@@ -17,6 +17,12 @@ const candidates = [
 ].filter(Boolean).map((path) => resolve(path));
 const appPath = candidates.find(existsSync);
 if (!appPath) throw new Error('Build the packaged app first with `npm run dist --workspace=@hermes-companion/desktop`.');
+const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+const provenancePath = join(appPath, 'Contents', 'Resources', 'build-provenance.json');
+const provenance = JSON.parse(await readFile(provenancePath, 'utf8').catch(() => '{}'));
+if (provenance.schema !== 'hermes-companion.build-provenance/v1' || provenance.commit !== commit || provenance.dirty !== false) {
+  throw new Error(`The packaged app does not prove a clean build of ${commit}. Rebuild it with \`npm run dist --workspace=@hermes-companion/desktop\`.`);
+}
 
 const executableSuffix = '/Contents/MacOS/Hermes Companion';
 const packagedExecutable = realpathSync(join(appPath, executableSuffix));
@@ -68,7 +74,6 @@ if (!await confirm('Did you verify this exact worktree is disposable and has no 
 }
 
 const sourceLock = JSON.parse(execFileSync('git', ['show', 'HEAD:infra/hermes-runtime/upstream.lock.json'], { encoding: 'utf8' }));
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const nonce = `COMPANION-CODING-RECOVERY-${randomUUID()}`;
 const filename = `.companion-acceptance-${nonce}.txt`;
 const request = `Create ${filename} in this authorized worktree with exactly this content: ${nonce}. Then run git status --short, wait 45 seconds, and report the file and Git state.`;

@@ -85,9 +85,9 @@ tests are deleted. Background runs now use the shared controller with a Node
 WebSocket injection; one-shot project, subagent, and pet RPCs use the pinned
 shared gateway client. Focused recovery/repository tests, type checks, and
 architecture ownership checks pass. The packaged operator fails closed when a
-different Hermes Companion bundle owns the single-instance lock and requires
-selection plus explicit disposable-status confirmation of an idle
-Railway-authorized worktree before it opens the candidate.
+candidate cannot prove a clean build of the reported commit, when a different
+Hermes Companion bundle owns the single-instance lock, or when no explicitly
+confirmed idle Railway-authorized disposable worktree is available.
 
 This goal is not accepted yet. The remaining critical path is the packaged
 `npm run acceptance:live-railway-coding-run` workflow against the pinned live
