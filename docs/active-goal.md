@@ -74,9 +74,11 @@ scope and limits of each claim.
 
 1. **P0 packaged/runtime proof:** repeat the core chat and recovery workflow
    in the packaged macOS app: restart and sleep/wake, forced gateway loss and
-   reconnect, unavailable-history recovery, credential reauthentication, a
-   live approval request/response, populated subagent data, and valid
-   context-usage data.
+   reconnect, unavailable-history recovery, credential reauthentication, and
+   a live approval request/response. The real Railway Serve probes already
+   cover streamed thinking/message deltas, valid context bounds, and a
+   populated subagent lifecycle (including interrupt); those still need their
+   packaged-app presentation/recovery proof where applicable.
 2. **P1 release-candidate proof:** complete one ordinary project/worktree
    loop, including terminal/files isolation, revert confirmation, push, draft
    PR, preview reload/failure recovery, and restoration of each session's dock

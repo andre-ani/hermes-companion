@@ -3,6 +3,8 @@ import WebSocket from 'ws';
 const origin = process.env.HERMES_SERVE_URL;
 const username = process.env.HERMES_SERVE_USERNAME;
 const password = process.env.HERMES_SERVE_PASSWORD;
+const contextRequired = process.env.HERMES_CONTEXT_REQUIRED === '1';
+const approvalChoice = process.env.HERMES_APPROVAL_CHOICE || '';
 const prompt = process.argv.slice(2).join(' ') || 'Reply with exactly: Hermes remote stream verified.';
 
 if (!origin || !username || !password) {
@@ -35,6 +37,11 @@ const result = await new Promise((resolve, reject) => {
   let messageDeltas = 0;
   let reasoningDeltas = 0;
   let toolEvents = 0;
+  let contextUsage = null;
+  let contextRequestId = 0;
+  let approvalRequestId = 0;
+  let approvalRequested = false;
+  let approvalResponded = false;
   const eventTypes = new Set();
   const timer = setTimeout(() => {
     socket.terminate();
@@ -53,15 +60,16 @@ const result = await new Promise((resolve, reject) => {
         send(2, 'prompt.submit', { session_id: sessionId, text: prompt });
         continue;
       }
-      if (frame.error) return reject(new Error(frame.error.message || 'Hermes RPC failed.'));
-      if (frame.method !== 'event') continue;
-      const event = frame.params ?? {};
-      if (event.session_id && event.session_id !== sessionId) continue;
-      eventTypes.add(event.type);
-      if (event.type === 'message.delta') messageDeltas += 1;
-      if (event.type === 'reasoning.delta' || event.type === 'thinking.delta') reasoningDeltas += 1;
-      if (String(event.type).startsWith('tool.')) toolEvents += 1;
-      if (event.type === 'message.complete') {
+      if (frame.id === contextRequestId && contextRequestId !== 0) {
+        if (frame.error) return reject(new Error(frame.error.message || 'session.context_breakdown failed'));
+        const payload = frame.result && typeof frame.result === 'object' ? frame.result : {};
+        const contextMax = Number(payload.context_max);
+        const contextUsed = Number(payload.context_used);
+        const contextPercent = Number(payload.context_percent);
+        if (!Number.isFinite(contextMax) || contextMax <= 0 || !Number.isFinite(contextUsed) || contextUsed < 0 || contextUsed > contextMax || !Number.isFinite(contextPercent) || Math.abs(contextPercent - ((contextUsed / contextMax) * 100)) > 1) {
+          return reject(new Error('Hermes returned unusable context bounds.'));
+        }
+        contextUsage = { contextMax, contextUsed, contextPercent, model: typeof payload.model === 'string' ? payload.model : null };
         clearTimeout(timer);
         socket.close();
         resolve({
@@ -73,6 +81,53 @@ const result = await new Promise((resolve, reject) => {
           messageDeltas,
           reasoningDeltas,
           toolEvents,
+          approvalRequested,
+          approvalResponded,
+          contextUsage,
+          completed: true,
+          eventTypes: [...eventTypes]
+        });
+        continue;
+      }
+      if (frame.id === approvalRequestId && approvalRequestId !== 0) {
+        if (frame.error) return reject(new Error(frame.error.message || 'approval.respond failed'));
+        approvalResponded = frame.result?.resolved === undefined || frame.result?.resolved > 0;
+        continue;
+      }
+      if (frame.error) return reject(new Error(frame.error.message || 'Hermes RPC failed.'));
+      if (frame.method !== 'event') continue;
+      const event = frame.params ?? {};
+      if (event.session_id && event.session_id !== sessionId) continue;
+      eventTypes.add(event.type);
+      if (event.type === 'approval.request') {
+        approvalRequested = true;
+        if (approvalChoice) {
+          approvalRequestId = 4;
+          send(approvalRequestId, 'approval.respond', { session_id: sessionId, choice: approvalChoice });
+        }
+      }
+      if (event.type === 'message.delta') messageDeltas += 1;
+      if (event.type === 'reasoning.delta' || event.type === 'thinking.delta') reasoningDeltas += 1;
+      if (String(event.type).startsWith('tool.')) toolEvents += 1;
+      if (event.type === 'message.complete') {
+        if (contextRequired) {
+          contextRequestId = 3;
+          send(contextRequestId, 'session.context_breakdown', { session_id: sessionId });
+          continue;
+        }
+        clearTimeout(timer);
+        socket.close();
+        resolve({
+          loginStatus: login.status,
+          ticketStatus: minted.status,
+          websocket: 'connected',
+          sessionCreated: true,
+          promptAccepted: true,
+          messageDeltas,
+          reasoningDeltas,
+          toolEvents,
+          approvalRequested,
+          approvalResponded,
           completed: true,
           eventTypes: [...eventTypes]
         });
