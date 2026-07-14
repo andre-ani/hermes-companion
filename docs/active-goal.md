@@ -23,6 +23,70 @@ release it must reliably provide:
 
 Nothing else is required to declare the product complete.
 
+## Status snapshot
+
+This section is the working status board for the release definition above. It
+is intentionally separate from the requirements: **done** means that the
+implementation exists and the named evidence has been observed; **remaining**
+means that the behavior is unproven, incomplete, or currently failing. A
+family is not release-complete merely because part of it is done.
+
+### Done or substantially verified
+
+- **Runtime boundary:** Hermes Agent is the sole runtime. The lean Railway
+  deployment, co-located Companion bridge, persistent Hermes volume, fresh
+  single-use Serve tickets, authenticated capability probes, and encrypted
+  renderer credentials are in place. The Railway authentication blocker is
+  resolved.
+- **Renderer and session ownership:** profile/session/workspace ownership,
+  reload recovery, active-turn reconciliation, stop/resume recovery, history
+  recovery, profile-switch isolation, and native browser ownership have
+  focused evidence in Electron and the source tests.
+- **Real chat baseline:** create/resume/search/rename/pin/unread/archive/
+  restore/delete, streamed text/reasoning/tools/approvals, text and image
+  attachments, and independent active/archived history fetching are backed by
+  Hermes contracts.
+- **Profiles, models, approval, and status:** Hermes Agent and Hermes Code
+  switching, model catalog/provenance, read-only OpenRouter inventory/policy,
+  approval persistence, gateway state, and the Agents/subagents status-bar
+  entry have evidence. Unsupported routed-model resolution remains explicitly
+  unimplemented rather than fabricated.
+- **Ordinary workspace surfaces:** project lifecycle, ordinary linked
+  worktrees, worktree-bound terminal/files, working-tree status, lazy diffs,
+  stage/unstage, commit, browser ownership, anchored overlays, and reachable
+  pane controls have implementation and focused evidence.
+- **Build baseline:** the Svelte/TypeScript checks and desktop/bridge
+  production builds passed at the last coherent checkpoint. The current full
+  test result is tracked below and is a release gate, not hidden by this
+  summary.
+
+See [`current-checkpoint.md`](./current-checkpoint.md) and the
+[`requirements-status.md`](./requirements-status.md) evidence ledger for the
+scope and limits of each claim.
+
+### Remaining before release
+
+1. **P0 packaged/runtime proof:** repeat the core chat and recovery workflow
+   in the packaged macOS app: restart and sleep/wake, forced gateway loss and
+   reconnect, unavailable-history recovery, credential reauthentication, a
+   live approval request/response, populated subagent data, and valid
+   context-usage data.
+2. **P1 release-candidate proof:** complete one ordinary project/worktree
+   loop, including terminal/files isolation, revert confirmation, push, draft
+   PR, preview reload/failure recovery, and restoration of each session's dock
+   tabs, surface, widths, focus, and bottom-terminal state.
+3. **Shared polish and release checks:** run the single normal/constrained/
+   reduced-motion UI pass, remove any remaining dead or misleading controls,
+   run security/release checks, build the packaged app, and perform final macOS
+   Electron UAT. Fix only failures found on those gates.
+
+The automated gate is currently green: **238 tests passed across 41 files**;
+desktop and bridge checks and production builds also pass. Those checks do not
+replace the packaged/runtime proof above.
+
+Until all three items pass, the goal remains open. Deferred parity work below is
+not allowed to displace these items.
+
 Hermes Agent is the sole agent runtime and source of truth. Railway hosts a
 lean pinned Hermes service and persistent Hermes state. Do not deploy Hermes
 Workspace, add a second agent backend, launch peer coding harnesses, or mirror
