@@ -171,6 +171,18 @@ describe('native BrowserView ownership', () => {
     expect.soft(windowCloseHandlers.some((handler) => browserCleanup.test(handler)), 'BrowserWindow close must release the native browser').toBe(true);
   });
 
+  it('keeps native bounds inside the content coordinate system and detaches stale geometry', async () => {
+    const electron = await electronSources();
+    const main = await readFile(new URL('main.cjs', electronSource), 'utf8');
+    expect.soft(main.includes("require('./browser-view-geometry.cjs')"), 'native bounds must be normalized by the Electron owner').toBe(true);
+    const boundsHandler = main.slice(main.indexOf("case 'browser.bounds'"), main.indexOf("case 'browser.layout'"));
+    expect.soft(/setViewBounds\(\)/.test(boundsHandler), 'bounds updates must flow through the native geometry owner').toBe(true);
+    const setBounds = functionSource(main, 'setViewBounds');
+    expect.soft(/normalizeBrowserBounds\(bounds,\s*\[width,\s*height\]\)/.test(setBounds), 'renderer geometry must be clamped to BrowserWindow content size').toBe(true);
+    expect.soft(/detachBrowserView\(view\)/.test(setBounds), 'stale or off-screen geometry must detach instead of pinning a tiny view').toBe(true);
+    expect.soft(/did-start-loading/.test(electron), 'renderer loading must release native browser ownership').toBe(true);
+  });
+
   it('does not keep an unowned raw BrowserView or layout alive at app scope', async () => {
     const main = await readFile(new URL('main.cjs', electronSource), 'utf8');
 

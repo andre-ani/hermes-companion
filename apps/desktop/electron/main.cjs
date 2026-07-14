@@ -8,6 +8,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const pty = require('node-pty');
+const { normalizeBrowserBounds } = require('./browser-view-geometry.cjs');
 
 const execFileAsync = promisify(execFile);
 const rendererUrl = process.env.HERMES_COMPANION_RENDERER_URL || 'http://127.0.0.1:5400';
@@ -331,7 +332,12 @@ async function dispatchNative(capability, input = {}) {
     case 'browser.reload': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); view?.webContents.reload(); return browserStatus(input.ownerKey, input.browserLeaseId); }
     case 'browser.close': closeBrowserView(input.ownerKey, input.browserLeaseId); return { ok: true };
     case 'browser.devtools': { const view = requireOwnedBrowserView(input.ownerKey, input.browserLeaseId); if (view && !view.webContents.isDestroyed()) view.webContents.openDevTools({ mode: 'detach' }); return { ok: Boolean(view) }; }
-    case 'browser.bounds': requireBrowserClaim(input.ownerKey, input.browserLeaseId); browserViewController.bounds = { x: input.x, y: input.y, width: input.width, height: input.height }; setViewBounds(); attachBrowserView(); return { ok: true };
+    case 'browser.bounds': {
+      requireBrowserClaim(input.ownerKey, input.browserLeaseId);
+      browserViewController.bounds = { x: input.x, y: input.y, width: input.width, height: input.height };
+      setViewBounds();
+      return { ok: true, attached: Boolean(mainWindow && browserViewController.view && mainWindow.contentView.children.includes(browserViewController.view)) };
+    }
     case 'browser.layout': requireBrowserClaim(input.ownerKey, input.browserLeaseId); browserViewController.layout = input.fullscreen ? 'fullscreen' : 'dock'; setViewBounds(); return { ok: true, fullscreen: browserViewController.layout === 'fullscreen' };
     case 'browser.status': return browserStatus(input.ownerKey, input.browserLeaseId);
     case 'notification.status': return { supported: Notification.isSupported() };
@@ -358,8 +364,24 @@ function setViewBounds() {
   const { view, bounds, layout } = browserViewController;
   if (!mainWindow || !view) return;
   const [width, height] = mainWindow.getContentSize();
-  if (layout === 'fullscreen') view.setBounds({ x: 0, y: 0, width, height: Math.max(200, height - 112) });
-  else if (bounds) view.setBounds({ x: Math.max(0, Math.round(bounds.x)), y: Math.max(0, Math.round(bounds.y)), width: Math.max(1, Math.min(width - Math.round(bounds.x), Math.round(bounds.width))), height: Math.max(1, Math.min(height - Math.round(bounds.y), Math.round(bounds.height))) });
+  if (layout === 'fullscreen') {
+    view.setBounds({ x: 0, y: 0, width, height: Math.max(200, height - 112) });
+    attachBrowserView();
+    return;
+  }
+  const normalized = normalizeBrowserBounds(bounds, [width, height]);
+  if (!normalized) {
+    detachBrowserView(view);
+    return;
+  }
+  browserViewController.bounds = normalized;
+  view.setBounds(normalized);
+  attachBrowserView();
+}
+
+function detachBrowserView(view = browserViewController.view) {
+  if (!view || !mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.contentView.children.includes(view)) mainWindow.contentView.removeChildView(view);
 }
 
 function attachBrowserView() {
@@ -395,7 +417,7 @@ function requireOwnedBrowserView(ownerKey, browserLeaseId) {
 
 function destroyBrowserView(view = browserViewController.view) {
   if (!view) return;
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(view)) mainWindow.contentView.removeChildView(view);
+  detachBrowserView(view);
   if (!view.webContents.isDestroyed()) {
     if (view.webContents.isDevToolsOpened()) view.webContents.closeDevTools();
     view.webContents.close();
@@ -521,6 +543,7 @@ function ensureWindow() {
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) releaseAnyBrowserView(); });
+  window.webContents.on('did-start-loading', () => releaseAnyBrowserView());
   window.webContents.on('render-process-gone', () => releaseAnyBrowserView());
   window.on('close', () => releaseAnyBrowserView());
   window.on('closed', () => { releaseAnyBrowserView(); if (mainWindow === window) mainWindow = null; });
