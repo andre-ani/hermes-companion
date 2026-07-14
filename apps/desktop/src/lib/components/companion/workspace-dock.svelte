@@ -250,8 +250,9 @@
     }) ?? null;
   }
 
-  async function loadBrowserStatus() {
+  async function loadBrowserStatus(options: { invalidatePendingOpen?: boolean } = {}) {
     if (typeof window === 'undefined') return;
+    if (options.invalidatePendingOpen) ++browserOperationGeneration;
     const identity = browserIdentity();
     try { await resolveRemoteResult(claimBrowser(identity)); const query = getBrowserStatus(identity); await query.refresh(); const next = await resolveRemoteResult(query); if (!isCurrentBrowserIdentity(identity)) return; browserState = next; if (browserState.url) browserUrl = browserState.url; }
     catch { if (isCurrentBrowserIdentity(identity)) browserState = closedBrowserState(); }
@@ -350,7 +351,7 @@
     const isBrowserVisible = visible && dockTab === 'browser';
     const identity = browserIdentity();
     untrack(() => {
-      if (isBrowserVisible) { void loadBrowserStatus(); return; }
+      if (isBrowserVisible) { void loadBrowserStatus({ invalidatePendingOpen: true }); return; }
       void releaseBrowserLease(identity.ownerKey, identity.browserLeaseId);
     });
   });

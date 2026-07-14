@@ -191,7 +191,8 @@ describe('native BrowserView ownership', () => {
     expect.soft(/stopBrowserGeometrySync\(\)/.test(openWeb), 'failed native opens must stop the renderer geometry loop').toBe(true);
     expect.soft(/browserState\s*=\s*closedBrowserState\(\)/.test(openWeb), 'failed native opens must close the renderer browser state').toBe(true);
     expect.soft(/browserOperationGeneration/.test(openWeb) && /current\(\)/.test(openWeb), 'stale open completions must not mutate a newer browser activation').toBe(true);
-    expect.soft(visibilityEffects.some((effect) => /loadBrowserStatus\(\)/.test(effect)), 'new leases must reconcile against native status instead of only claiming').toBe(true);
+    expect.soft(/loadBrowserStatus\(\{\s*invalidatePendingOpen:\s*true\s*\}\)/.test(dock), 'activation status reconciliation must invalidate an in-flight open for the prior lease state').toBe(true);
+    expect.soft(visibilityEffects.some((effect) => /loadBrowserStatus\(/.test(effect)), 'new leases must reconcile against native status instead of only claiming').toBe(true);
   });
 
   it('does not keep an unowned raw BrowserView or layout alive at app scope', async () => {
