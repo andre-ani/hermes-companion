@@ -30,14 +30,19 @@ than rewriting the evidence after the fact.
 
 ## Worktree safety
 
-The pre-audit dirty work remains untouched in
-`/Users/andreani/dev/hermes-companion`. Architecture correction work is isolated
-on `codex/upstream-thin-adapter` in
-`/Users/andreani/dev/hermes-companion-upstream-thin`. Do not copy the pending
-workspace-metadata reconstruction into the migration without reclassification.
+The accepted architecture correction is now fast-forwarded onto local `main` at
+`937635f`. The pre-correction dirty work is preserved without modification on
+`codex/pre-upstream-correction-dirty-snapshot` at `a3c4123`; it is not part of
+`main`. Its workspace-metadata reconstruction must be reclassified against the
+ownership matrix before any individual change is reconsidered.
+
+The migration worktree and `codex/upstream-thin-adapter` remain as accepted
+checkpoint references. They are not the active implementation checkout.
 
 ## Next step
 
-Review this accepted subtraction slice before beginning Code-mode or repository
-subtraction. Do not revive the deleted chat path or carry the original dirty
-workspace-metadata reconstruction into this branch without reclassification.
+Continue on `main` with the bounded goal in `active-goal.md`: move background
+Hermes coding/harness runs to the upstream-aligned controller and delete the
+remaining custom server transport/recovery layer. Do not revive the deleted
+chat path, merge the quarantined dirty snapshot, or begin repository/workspace
+subtraction in that slice.

@@ -8,11 +8,13 @@ Hermes runtime. It is not a second Hermes frontend SDK or control plane.
 | Capability or state | Authority and mutation owner | Reconnect/reload source | Allowed Companion projection |
 | --- | --- | --- | --- |
 | Sessions, durable IDs, transcript, running/interrupt state | Hermes Serve and Hermes session storage | `session.resume`, history APIs, `session.info`, and subsequent events | Current durable session ID, selection, loading/error presentation |
+| Background coding turn and progress | Hermes Serve and the durable Hermes session | Durable session ID, `session.resume`, history, `session.info`, and subsequent events after renderer or app-process loss | Opaque run-to-durable-session routing and transient progress presentation |
 | Transport IDs and JSON-RPC request correlation | The live upstream shared client | Discarded with the socket; a new socket receives a new transport ID | None outside the live controller |
 | Models, provider resolution, context usage, approvals, subagents | Hermes | Hermes queries/events after reconnect | Transient view model only |
 | Hermes projects and session grouping | Hermes project/session APIs | Fresh project/session queries | Expanded rows and selection only |
 | Railway credential and Serve-ticket authentication | Companion Electron/server boundary | Encrypted credential store, then a newly minted single-use ticket | Connection status; never the credential or ticket |
 | Execution bridge, path confinement, writer leases | Companion bridge/native capability layer | Bridge state and execution-host inspection | Opaque binding and lease status |
+| Coding-run/worktree authorization and audit | Companion run coordinator using the normal repository and bridge boundaries | Opaque durable-session binding plus Hermes terminal status and execution-host truth | Run selection, lease status, notifications, and audit records |
 | Git worktree filesystem, branch, terminal, files, Git, preview | The execution host and Git | Fresh native/bridge queries | Selected tab, layout, editor and preview presentation |
 | Browser windows and native surfaces | Electron | Electron surface registry keyed by logical owner | Tab, URL, bounds, visibility, focus |
 | Desktop presentation | Companion | Companion preferences where persistence is useful | Drafts, selection, scroll, layout, pane state |
@@ -24,10 +26,13 @@ by the next Hermes resume/query/event result.
 ## Process boundary
 
 1. The sandboxed renderer composes Svelte UI and runs the framework-independent
-   upstream Hermes shared client through a thin Svelte adapter.
-2. SvelteKit remote functions expose governed Companion capabilities such as
-   credential-backed ticket minting and native/bridge operations. They do not
-   implement a parallel Hermes session state machine.
+   upstream Hermes shared client through a thin Svelte adapter for interactive
+   sessions.
+2. Background coding coordination may run the same framework-independent
+   controller server-side with an injected Node WebSocket. SvelteKit remote
+   functions expose governed Companion capabilities such as credential-backed
+   ticket minting, writer leases, audit, and native/bridge operations. They do
+   not implement a parallel Hermes session state machine.
 3. Electron owns encrypted secrets, native browser surfaces, local Git/PTYs,
    notifications, and application lifecycle.
 4. The Companion bridge exposes the same path-confined execution capabilities
@@ -37,6 +42,11 @@ Long-lived Railway credentials never cross into the renderer. The renderer may
 receive one short-lived, single-use Hermes WebSocket URL immediately before it
 opens a physical socket. On reconnect it requests a new URL and resumes by the
 durable Hermes session ID; it never replays a submitted prompt.
+
+`hermes-serve-runs.ts` is the current known exception to this target: it still
+duplicates the socket, transport identity, reconnect, and recovery machinery
+for background coding runs. The active goal removes that exception while
+retaining Companion's worktree authorization and writer-lease responsibilities.
 
 ## Source-reuse boundary
 

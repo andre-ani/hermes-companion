@@ -66,13 +66,21 @@ currently deployed image. Pin changes require a new diff audit.
   the corresponding custom contracts/tests have been removed in the first
   chat slice.
 - `hermes-serve-runs.ts` combines a custom JSON-RPC socket with coding-run and
-  recovery state; it remains only until Code mode moves to the shared adapter.
+  recovery state. It also supplies one-shot project, subagent, pet, and related
+  RPC calls. The active slice moves all of those transports to the pinned
+  upstream shared client without redesigning the capabilities.
 - `hermes-session-recovery.ts` interprets resume payloads for both custom paths;
-  it becomes obsolete after Code mode migration.
-- `+page.svelte` owns turn maps, reattachment, polling, and recovery decisions
-  that belong in the upstream-aligned controller.
+  only the remaining custom server path still needs it, so it becomes obsolete
+  with that path.
+- Interactive chat no longer has page-owned turn maps, long-poll loops, or a
+  custom recovery state machine. Background harness and annotation surfaces
+  still consume Companion-buffered run events until the active slice replaces
+  them with transient projections of the shared controller.
 - `companion-repository.ts` and session/workspace helpers must retain only
   Companion-owned bindings and presentation, never repair missing Hermes facts.
+- The former dirty workspace reconstruction is preserved only on
+  `codex/pre-upstream-correction-dirty-snapshot`; it is not an active source of
+  requirements or code for `main`.
 
 ## Unique Companion behavior that remains
 
