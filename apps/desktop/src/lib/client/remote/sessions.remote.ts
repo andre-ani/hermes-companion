@@ -3,7 +3,7 @@ import { ChatTurnControl, ChatTurnSnapshot, ContextUsage, HermesMessage, z } fro
 import { getCompanionRepository } from '$lib/server/companion-repository';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
 import { cancelHermesChatTurn, cancelHermesSessionTurn, getHermesChatTurnRecovery, nextHermesChatTurn, respondHermesChatApproval, startHermesChatTurn } from '$lib/server/hermes-chat-runs';
-import { requestHermesServe } from '$lib/server/hermes-serve-runs';
+import { requestHermesServe, requestHermesServeSession } from '$lib/server/hermes-serve-runs';
 
 const sessionId = z.object({ sessionId: z.string().min(1), profileId: z.string().min(1).optional() });
 
@@ -56,13 +56,19 @@ export const searchSessions = query(z.object({
   })));
 });
 
-export const getSessionContextUsage = query(sessionId, async ({ sessionId }) => {
+export const getSessionContextUsage = query(sessionId, async ({ sessionId, profileId }) => {
   const connection = getActiveHermesClient().executionContext().connection;
   if (!connection.serveWsUrl && !connection.serveUrl) {
     return { available: false as const, data: null, reason: 'Context usage requires an authorized Hermes Serve connection.' };
   }
   try {
-    const raw = await requestHermesServe<Record<string, unknown>>(connection, 'session.context_breakdown', { session_id: sessionId });
+    const raw = await requestHermesServeSession<Record<string, unknown>>(
+      connection,
+      sessionId,
+      'session.context_breakdown',
+      {},
+      profileId ?? connection.hermesProfileId ?? 'default'
+    );
     const data = ContextUsage.parse({
       categories: raw.categories,
       contextMax: raw.context_max,

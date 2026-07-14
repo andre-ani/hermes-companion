@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocketServer } from 'ws';
 import { CompanionRepository } from '../apps/desktop/src/lib/server/companion-repository';
-import { HermesRpcSocket, HermesServeRunManager } from '../apps/desktop/src/lib/server/hermes-serve-runs';
+import { HermesRpcSocket, HermesServeRunManager, requestHermesServeSession } from '../apps/desktop/src/lib/server/hermes-serve-runs';
 
 const { invokeNative, bridgeInvoke, bridgeClient } = vi.hoisted(() => {
   const bridgeInvoke = vi.fn().mockResolvedValue({ ok: true });
@@ -25,6 +25,43 @@ afterEach(async () => {
 });
 
 describe('HermesServeRunManager', () => {
+  it('resumes a durable session before issuing a session-scoped request', async () => {
+    const received: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: number; method: string; params: Record<string, unknown> };
+        received.push({ method: request.method, params: request.params });
+        if (request.method === 'session.resume') {
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: 'transport-session-1' } }));
+        } else if (request.method === 'session.context_breakdown') {
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { context_used: 12, context_max: 100 } }));
+        }
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('WebSocket test server did not bind.');
+    const connection = {
+      id: 'gateway-1', name: 'Hermes', kind: 'local' as const, url: 'http://127.0.0.1:8642', controlUrl: null, serveUrl: null,
+      serveWsUrl: `ws://127.0.0.1:${address.port}`, bridgeUrl: null, hermesProfileId: null
+    };
+
+    await expect(requestHermesServeSession(
+      connection,
+      'durable-session-1',
+      'session.context_breakdown',
+      { session_id: 'must-not-win' },
+      'profile-1'
+    )).resolves.toEqual({ context_used: 12, context_max: 100 });
+
+    expect(received).toEqual([
+      { method: 'session.resume', params: { session_id: 'durable-session-1', cols: 96, profile: 'profile-1' } },
+      { method: 'session.context_breakdown', params: { session_id: 'transport-session-1' } }
+    ]);
+  });
+
   it('resolves a fresh WebSocket URL for every physical reconnect', async () => {
     const observedUrls: string[] = [];
     const states: string[] = [];

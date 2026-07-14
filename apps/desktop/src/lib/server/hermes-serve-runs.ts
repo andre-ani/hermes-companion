@@ -288,6 +288,29 @@ export async function requestHermesServe<T>(
   }
 }
 
+export async function requestHermesServeSession<T>(
+  connection: GatewayConnection,
+  persistedSessionId: string,
+  method: string,
+  params: Record<string, unknown> = {},
+  profileId = connection.hermesProfileId ?? 'default',
+  timeoutMs = 15_000
+): Promise<T> {
+  const socket = new HermesRpcSocket(() => resolveHermesServeWebSocketUrl(connection), () => undefined, { autoReconnect: false });
+  try {
+    await socket.connect();
+    const resumed = await socket.request<HermesSessionResumePayload>('session.resume', {
+      session_id: persistedSessionId,
+      cols: 96,
+      profile: profileId
+    }, timeoutMs);
+    if (!resumed.session_id) throw new Error('Hermes did not resume the requested session.');
+    return await socket.request<T>(method, { ...params, session_id: resumed.session_id }, timeoutMs);
+  } finally {
+    socket.close();
+  }
+}
+
 export class HermesServeRunManager {
   private runs = new Map<string, RunState>();
 

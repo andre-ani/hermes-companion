@@ -46,6 +46,7 @@ export const reconcileAssistantText = (current: string, authoritative: string) =
   if (!authoritative) return current;
   if (!current || authoritative.startsWith(current)) return authoritative;
   if (current.startsWith(authoritative)) return current;
+  if (current.trim() === authoritative.trim()) return authoritative;
   return null;
 };
 
