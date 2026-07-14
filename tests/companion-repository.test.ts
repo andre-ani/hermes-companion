@@ -151,7 +151,7 @@ describe('CompanionRepository', () => {
   it('enforces one active writer per worktree', async () => {
     const repo = await repository();
     await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', writerRunId: null, createdAt: new Date().toISOString() });
-    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', status: 'starting' as const, startedAt: new Date().toISOString(), finishedAt: null };
+    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', durableSessionId: null, startedAt: new Date().toISOString(), finishedAt: null };
     await repo.acquireWriter('wt-1', run);
     await expect(repo.acquireWriter('wt-1', { ...run, id: crypto.randomUUID() })).rejects.toThrow('active writer');
     await repo.releaseWriter('wt-1', run.id, 'completed');
@@ -194,7 +194,7 @@ describe('CompanionRepository', () => {
   it('does not move an active writer even when the repaired binding keeps its identifier', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
     await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/before', branch: 'before', threadId: 'session-1', writerRunId: null, createdAt });
-    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', status: 'starting' as const, startedAt: createdAt, finishedAt: null };
+    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', durableSessionId: null, startedAt: createdAt, finishedAt: null };
     await repo.acquireWriter('wt-1', run);
     await expect(repo.upsertWorktreeBinding({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/after', branch: 'after', threadId: 'session-1', writerRunId: run.id, createdAt })).rejects.toThrow('active writer');
   });

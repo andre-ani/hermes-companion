@@ -17,7 +17,7 @@ beforeAll(() => {
   const originalLoad = Module._load;
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return {
-      app: { isPackaged: true, whenReady: () => new Promise(() => {}), on() {}, getVersion: () => 'test', exit() {}, quit() {} },
+      app: { isPackaged: true, requestSingleInstanceLock: () => true, whenReady: () => new Promise(() => {}), on() {}, getVersion: () => 'test', exit() {}, quit() {} },
       BrowserWindow: { getAllWindows: () => [] }, WebContentsView: class {}, session: {}, ipcMain: {}, shell: {}, utilityProcess: {}, safeStorage: {}, Notification: {}, dialog: {}
     };
     if (request === 'node-pty') return { spawn: () => { throw new Error('PTY is unavailable in native Git tests.'); } };

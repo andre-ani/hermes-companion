@@ -6,7 +6,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import { Textarea } from '$lib/components/ui/textarea';
   import { Skeleton } from '$lib/components/ui/skeleton';
-  import { cancelHarnessRun, discoverHarnesses, getHarnessRunEvents, respondHarnessApproval, startHarnessRun } from '$lib/client/remote/harnesses.remote';
+  import { cancelHarnessRun, discoverHarnesses, getActiveHarnessRun, getHarnessRunEvents, respondHarnessApproval, startHarnessRun } from '$lib/client/remote/harnesses.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import type { HarnessCapabilities, HarnessEvent, WorktreeRecord } from '@hermes-companion/contracts';
   import { Bot, CircleAlert, CircleCheck, CircleStop, Play, ShieldAlert, TerminalSquare, Wrench } from '@lucide/svelte';
@@ -22,6 +22,8 @@
   let respondingApproval = $state<number | null>(null);
   let resolvedApprovals = $state(new Set<number>());
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let restoredWorktreeId = $state('');
+  let restoreGeneration = 0;
   const latestSequence = $derived(events.at(-1)?.sequence ?? 0);
 
   async function loadRuntime() {
@@ -31,12 +33,27 @@
     finally { loading = false; }
   }
 
+  async function restoreActiveRun(worktreeId: string, generation: number) {
+    try {
+      const active = await resolveRemoteResult(getActiveHarnessRun({ worktreeId }));
+      if (generation !== restoreGeneration || worktree?.worktreeId !== worktreeId) return;
+      if (!active) return;
+      run = active;
+      events = [];
+      resolvedApprovals = new Set();
+      void poll();
+    } catch (cause) {
+      if (generation !== restoreGeneration || worktree?.worktreeId !== worktreeId) return;
+      error = cause instanceof Error ? cause.message : 'The active Hermes run could not be recovered.';
+    }
+  }
+
   async function start() {
     const task = prompt.trim(); if (!task || !worktree || starting) return;
     starting = true; error = ''; events = []; resolvedApprovals = new Set();
     try {
       run = await resolveRemoteResult(startHarnessRun({ harness: 'hermes', prompt: task, worktree: { projectId: worktree.projectId, worktreeId: worktree.worktreeId, path: worktree.path, branch: worktree.branch } }));
-      prompt = ''; schedulePoll(0);
+      prompt = ''; void poll();
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Hermes run could not start.'; }
     finally { starting = false; }
   }
@@ -73,6 +90,23 @@
   }
 
   onMount(() => { void loadRuntime(); return () => { if (pollTimer) clearTimeout(pollTimer); }; });
+
+  $effect(() => {
+    const worktreeId = worktree?.worktreeId ?? '';
+    if (!worktreeId) {
+      restoredWorktreeId = '';
+      restoreGeneration += 1;
+      run = null;
+      events = [];
+      return;
+    }
+    if (restoredWorktreeId === worktreeId) return;
+    restoredWorktreeId = worktreeId;
+    const generation = ++restoreGeneration;
+    run = null;
+    events = [];
+    void restoreActiveRun(worktreeId, generation);
+  });
 </script>
 
 <section class="run-panel" aria-labelledby="run-heading">

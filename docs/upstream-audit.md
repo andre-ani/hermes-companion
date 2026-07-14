@@ -65,17 +65,15 @@ currently deployed image. Pin changes require a new diff audit.
 - `hermes-chat-runs.ts`, its polling remote operations, renderer turn maps, and
   the corresponding custom contracts/tests have been removed in the first
   chat slice.
-- `hermes-serve-runs.ts` combines a custom JSON-RPC socket with coding-run and
-  recovery state. It also supplies one-shot project, subagent, pet, and related
-  RPC calls. The active slice moves all of those transports to the pinned
-  upstream shared client without redesigning the capabilities.
-- `hermes-session-recovery.ts` interprets resume payloads for both custom paths;
-  only the remaining custom server path still needs it, so it becomes obsolete
-  with that path.
-- Interactive chat no longer has page-owned turn maps, long-poll loops, or a
-  custom recovery state machine. Background harness and annotation surfaces
-  still consume Companion-buffered run events until the active slice replaces
-  them with transient projections of the shared controller.
+- `hermes-serve-runs.ts` and `hermes-session-recovery.ts` are deleted. Background
+  runs use the framework-independent upstream-aligned session controller with a
+  Node WebSocket injection and a Companion-owned writer/binding coordinator.
+- Project, subagent, pet, and related one-shot calls use
+  `packages/hermes-adapter/src/gateway-request.ts`, a direct wrapper around the
+  pinned shared `JsonRpcGatewayClient`; no second socket implementation remains.
+- Interactive chat and background runs no longer have custom transport or
+  recovery state machines. Harness and annotation surfaces consume transient
+  projections of the shared controller and rehydrate active runs by durable ID.
 - `companion-repository.ts` and session/workspace helpers must retain only
   Companion-owned bindings and presentation, never repair missing Hermes facts.
 - The former dirty workspace reconstruction is preserved only on

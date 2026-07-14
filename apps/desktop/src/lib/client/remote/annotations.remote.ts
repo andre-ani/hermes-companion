@@ -3,7 +3,7 @@ import { AnnotationPayload, z } from '@hermes-companion/contracts';
 import { getCompanionRepository } from '$lib/server/companion-repository';
 import { requireExecutionHost } from '$lib/server/execution-host';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
-import { getHermesServeRunManager } from '$lib/server/hermes-serve-runs';
+import { getHermesRunCoordinator } from '$lib/server/hermes-run-coordinator';
 import { invokeNative } from '$lib/server/native-client';
 import { assertActiveWorktreeOwner, requireActiveWorktree } from '$lib/server/worktree-ownership';
 
@@ -31,7 +31,7 @@ async function startTask(annotationId: string) {
     const client = getActiveHermesClient(); const context = client.executionContext();
     if (context.connection.id !== worktree.connectionId || (context.connection.hermesProfileId ?? 'default') !== worktree.profileId) throw new Error('The active Hermes workspace changed before this design task could start.');
     await repository.updateAnnotationTask(annotationId, { taskStatus: 'starting', runId: null, lastEventSequence: 0 });
-    const run = await getHermesServeRunManager().start({ harness: 'hermes', prompt: taskPrompt(annotation, worktree), worktree: { projectId: worktree.projectId, worktreeId: worktree.worktreeId, path: worktree.path, branch: worktree.branch } }, context.connection, context.token);
+    const run = await getHermesRunCoordinator().start({ harness: 'hermes', prompt: taskPrompt(annotation, worktree), worktree: { projectId: worktree.projectId, worktreeId: worktree.worktreeId, path: worktree.path, branch: worktree.branch } }, context.connection);
     await repository.updateAnnotationTask(annotationId, { taskStatus: 'running', runId: run.id, lastEventSequence: 0 });
     await repository.recordAudit('annotation.task.started', annotationId, { runId: run.id, worktreeId: worktree.worktreeId });
     return repository.getAnnotation(annotationId);
@@ -49,9 +49,8 @@ export const getAnnotationTaskEvents = query(annotationTask.extend({ after: z.nu
   const worktree = await requireActiveWorktree(annotation.sourceWorktreeId);
   if (worktree.threadId !== annotation.targetThreadId) throw new Error('Design task worktree binding is no longer valid.');
   if (!annotation.runId) return { annotationId, runId: null, status: annotation.taskStatus, events: [] };
-  const manager = getHermesServeRunManager();
-  if (!manager.has(annotation.runId)) throw new Error('The linked Hermes run is no longer available on this app instance.');
-  const result = manager.events(annotation.runId, after); const latestSequence = result.events.at(-1)?.sequence ?? annotation.lastEventSequence;
+  const connection = getActiveHermesClient().executionContext().connection;
+  const result = await getHermesRunCoordinator().events(annotation.runId, after, connection); const latestSequence = result.events.at(-1)?.sequence ?? annotation.lastEventSequence;
   const terminal = ['completed', 'failed', 'cancelled'].includes(result.status);
   const previous = annotation.taskStatus;
   await repository.updateAnnotationTask(annotationId, { taskStatus: result.status, lastEventSequence: latestSequence });

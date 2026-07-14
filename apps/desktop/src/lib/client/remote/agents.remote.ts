@@ -1,7 +1,7 @@
 import { command, query } from '$app/server';
 import { HermesDelegationStatus, HermesSubagent, z } from '@hermes-companion/contracts';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
-import { requestHermesServe } from '$lib/server/hermes-serve-runs';
+import { requestHermesServe } from '$lib/server/hermes-gateway';
 
 const empty = z.object({});
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};

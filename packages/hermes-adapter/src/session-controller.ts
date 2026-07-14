@@ -21,6 +21,7 @@ export type HermesAttachmentInput = {
 
 export type CreateSessionInput = {
   profileId: string;
+  requireDurableSession?: boolean;
   model?: string;
   provider?: string;
   cwd?: string;
@@ -135,6 +136,31 @@ const lastAssistantAfter = (items: readonly unknown[], baseline: number) => {
     if (assistantText || reasoning) return { text: assistantText, reasoning };
   }
   return null;
+};
+const toolsFromHistory = (items: readonly unknown[]): HermesToolCall[] => {
+  const results = new Map<string, unknown>();
+  for (const value of items) {
+    const item = record(value);
+    if (item.role !== 'tool') continue;
+    const id = text(item.tool_call_id) || text(item.id);
+    if (id) results.set(id, item.result ?? item.content ?? item.text);
+  }
+  return items.flatMap((value, messageIndex) => {
+    const item = record(value);
+    if (item.role !== 'assistant' || !Array.isArray(item.tool_calls)) return [];
+    return item.tool_calls.map((value, callIndex) => {
+      const call = record(value);
+      const fn = record(call.function);
+      const id = text(call.id) || `history-tool-${messageIndex}-${callIndex}`;
+      return {
+        id,
+        name: text(fn.name) || text(call.name) || 'tool',
+        arguments: fn.arguments ?? call.arguments,
+        ...(results.has(id) ? { result: results.get(id) } : {}),
+        status: results.has(id) ? 'complete' as const : 'running' as const
+      };
+    });
+  });
 };
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
@@ -268,7 +294,7 @@ export class UpstreamHermesSessionController implements HermesSessionController 
       ...(input.provider ? { provider: input.provider } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {})
     });
-    const persisted = durableId(created, text(created.session_id));
+    const persisted = durableId(created, input.requireDurableSession ? undefined : text(created.session_id));
     if (!persisted || !transportId(created)) throw new Error('Hermes did not return a usable session identity.');
     this.applyResume(created, persisted, false);
     this.publish({ status: 'ready', error: null });
@@ -292,6 +318,7 @@ export class UpstreamHermesSessionController implements HermesSessionController 
     if (!persisted) throw new Error('Hermes did not return a durable session identity.');
     this.currentTransportId = currentTransport;
     const history = messages(payload);
+    const historyTools = toolsFromHistory(history);
     const active = inflight(payload);
     const running = isRunning(payload);
     const lostApproval = recovering && this.snapshotValue.approval !== null;
@@ -303,9 +330,9 @@ export class UpstreamHermesSessionController implements HermesSessionController 
       sessionInfo: record(payload.info),
       status: lostApproval ? 'awaiting-input' : running ? 'running' : wasActive && recovered ? 'completed' : 'ready',
       assistant: running
-        ? { ...this.snapshotValue.assistant, text: active.assistant || this.snapshotValue.assistant.text }
+        ? { ...this.snapshotValue.assistant, text: active.assistant || this.snapshotValue.assistant.text, toolCalls: historyTools.length ? historyTools : this.snapshotValue.assistant.toolCalls }
         : recovered
-          ? { ...this.snapshotValue.assistant, ...recovered, thinkingStatus: null }
+          ? { ...this.snapshotValue.assistant, ...recovered, thinkingStatus: null, toolCalls: historyTools.length ? historyTools : this.snapshotValue.assistant.toolCalls }
           : this.snapshotValue.assistant,
       approval: null,
       error: lostApproval
@@ -369,7 +396,7 @@ export class UpstreamHermesSessionController implements HermesSessionController 
     if (!sessionId || !this.snapshotValue.approval) throw new Error('This Hermes approval is no longer pending.');
     const result = await client.request<{ resolved?: unknown }>('approval.respond', { session_id: sessionId, choice }, 15_000);
     if (result.resolved === 0) throw new Error('This Hermes approval is no longer pending.');
-    this.publish({ status: 'running', approval: null });
+    if (this.snapshotValue.status === 'awaiting-input') this.publish({ status: 'running', approval: null });
   }
 
   async getContextBreakdown() {

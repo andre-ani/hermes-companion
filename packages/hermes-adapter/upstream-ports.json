@@ -14,6 +14,12 @@
       "divergence": "none"
     },
     {
+      "mode": "direct",
+      "upstream": "apps/shared/src/json-rpc-gateway.ts;apps/shared/src/websocket-url.ts",
+      "local": "packages/hermes-adapter/src/gateway-request.ts",
+      "divergence": "One-shot Node and browser callers share the pinned upstream client while injecting only fresh socket URL and WebSocket providers."
+    },
+    {
       "mode": "behavioral-port",
       "upstream": "apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts;apps/desktop/src/app/session/hooks/use-session-actions/index.ts;apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts;apps/desktop/src/app/session/hooks/use-message-stream/gateway-event.ts;apps/desktop/src/app/session/hooks/use-route-resume.ts;apps/desktop/src/store/prompts.ts",
       "local": "packages/hermes-adapter/src/session-controller.ts",

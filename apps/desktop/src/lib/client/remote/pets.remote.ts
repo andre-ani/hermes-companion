@@ -1,7 +1,7 @@
 import { command, query } from '$app/server';
 import { HermesPetGallery, HermesPetInfo, HermesPetScaleInput, HermesPetSelectInput, z } from '@hermes-companion/contracts';
 import { getActiveHermesClient } from '$lib/server/hermes-client';
-import { requestHermesServe } from '$lib/server/hermes-serve-runs';
+import { requestHermesServe } from '$lib/server/hermes-gateway';
 import { getCompanionRepository } from '$lib/server/companion-repository';
 
 const empty = z.object({});

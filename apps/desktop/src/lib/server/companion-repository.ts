@@ -6,7 +6,8 @@ import { AnnotationPayload, DesktopPreferences, GatewayConnection, PreviewLease,
 
 const AuditEvent = z.object({ id: z.string().uuid(), action: z.string(), subject: z.string(), at: z.string().datetime(), detail: z.record(z.string(), z.unknown()).default({}) });
 const RunRecord = z.object({
-  id: z.string().uuid(), worktreeId: z.string(), harness: z.string(), status: z.enum(['starting', 'running', 'completed', 'cancelled', 'failed']),
+  id: z.string().uuid(), worktreeId: z.string(), harness: z.string(),
+  durableSessionId: z.string().min(1).nullable().default(null),
   startedAt: z.string().datetime(), finishedAt: z.string().datetime().nullable()
 });
 const AnnotationTaskStatus = z.enum(['queued', 'starting', 'running', 'completed', 'cancelled', 'failed']);
@@ -294,14 +295,29 @@ export class CompanionRepository {
     return worktree;
   }
 
+  async bindRunSession(runId: string, durableSessionId: string) {
+    const state = await this.load();
+    const run = state.runs.find((item) => item.id === runId && item.finishedAt === null);
+    if (!run) throw new Error('Active Hermes run was not found.');
+    if (run.durableSessionId && run.durableSessionId !== durableSessionId) throw new Error('Hermes run is already bound to another durable session.');
+    run.durableSessionId = durableSessionId;
+    this.addAuditToState(state, 'hermes.run.session-bound', runId, { worktreeId: run.worktreeId });
+    await this.persist();
+    return run;
+  }
+
+  async getRun(runId: string) { return (await this.load()).runs.find((item) => item.id === runId) ?? null; }
+
   async releaseWriter(worktreeId: string, runId: string, status: 'completed' | 'cancelled' | 'failed') {
     const state = await this.load();
     const worktree = state.worktrees.find((item) => item.worktreeId === worktreeId);
-    if (worktree?.writerRunId === runId) worktree.writerRunId = null;
+    if (!worktree || worktree.writerRunId !== runId) return false;
+    worktree.writerRunId = null;
     const run = state.runs.find((item) => item.id === runId);
-    if (run) { run.status = status; run.finishedAt = new Date().toISOString(); }
+    if (run) run.finishedAt = new Date().toISOString();
     this.addAuditToState(state, 'writer.released', worktreeId, { runId, status });
     await this.persist();
+    return true;
   }
 
   async listPreviews(worktreeId?: string) {

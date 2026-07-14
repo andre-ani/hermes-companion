@@ -11,6 +11,7 @@
   import CodeReview from './code-review.svelte';
   import TerminalSplit from './terminal-split.svelte';
   import AgentsDock from './agents-dock.svelte';
+  import HarnessPanel from './harness-panel.svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
@@ -26,8 +27,8 @@
   type AnnotationTask = { id: string; route: string; note: string; taskStatus: 'queued' | 'starting' | 'running' | 'completed' | 'cancelled' | 'failed'; runId: string | null; lastEventSequence: number };
 
   let { worktree = null, gitWorkspace = null, unavailableReason = null, browserOwnerKey, browserLeaseId, visible, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; unavailableReason?: string | null; browserOwnerKey: string; browserLeaseId: string; visible: boolean; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean, identity: { ownerKey: string; browserLeaseId: string }) => void; dockTab?: string; openTabs?: string[] } = $props();
-  const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : 'Files';
-  const surfaceOptions = [{ id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
+  const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : surface === 'run' ? 'Run' : 'Files';
+  const surfaceOptions = [{ id: 'run', label: 'Run', icon: Play }, { id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
   let tabMenuOpen = $state(false);
   function openSurface(surface: string) { if (!openTabs.includes(surface)) openTabs = [...openTabs, surface]; dockTab = surface; tabMenuOpen = false; if (surface === 'browser') void refreshBrowserSurface(); }
   async function closeSurface(surface: string) { const index = openTabs.indexOf(surface); if (surface === 'browser') await browserAction('close'); const remaining = openTabs.filter((item) => item !== surface); openTabs = remaining; if (dockTab === surface) dockTab = remaining[index - 1] ?? remaining[index] ?? remaining[0] ?? 'surfaces'; }
@@ -376,6 +377,7 @@
 {#if dockTab === 'surfaces'}
   <section class="surface-chooser" aria-label="Right panel surfaces">
     <div class="surface-grid">
+      <Button class="surface-card" variant="ghost" onclick={() => openSurface('run')}><Play /><span>Run</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('changes')}><GitCompareArrows /><span>Changes</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('browser')}><Globe2 /><span>Browser</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('terminal')}><Terminal /><span>Terminal</span></Button>
@@ -387,7 +389,7 @@
   <header class="dock-header">
     <Tabs.List variant="line">
       {#each openTabs as surface (surface)}
-        <span class="dock-tab"><Tabs.Trigger value={surface}>{#if surface === 'changes'}<GitCompareArrows />{:else if surface === 'browser'}<Globe2 />{:else if surface === 'terminal'}<Terminal />{:else if surface === 'agents'}<Bot />{:else}<FolderTree />{/if}{surfaceLabel(surface)}</Tabs.Trigger><Button size="icon-xs" variant="ghost" onclick={() => closeSurface(surface)} aria-label={`Close ${surfaceLabel(surface)} tab`} title={`Close ${surfaceLabel(surface)} tab`}><X /></Button></span>
+        <span class="dock-tab"><Tabs.Trigger value={surface}>{#if surface === 'changes'}<GitCompareArrows />{:else if surface === 'browser'}<Globe2 />{:else if surface === 'terminal'}<Terminal />{:else if surface === 'agents'}<Bot />{:else if surface === 'run'}<Play />{:else}<FolderTree />{/if}{surfaceLabel(surface)}</Tabs.Trigger><Button size="icon-xs" variant="ghost" onclick={() => closeSurface(surface)} aria-label={`Close ${surfaceLabel(surface)} tab`} title={`Close ${surfaceLabel(surface)} tab`}><X /></Button></span>
       {/each}
     </Tabs.List>
     <Popover.Root bind:open={tabMenuOpen}>
@@ -484,6 +486,10 @@
 
   <Tabs.Content value="agents" class="dock-panel agents-panel">
     <AgentsDock />
+  </Tabs.Content>
+
+  <Tabs.Content value="run" class="dock-panel run-panel">
+    <HarnessPanel {worktree} />
   </Tabs.Content>
 </Tabs.Root>
 {/if}

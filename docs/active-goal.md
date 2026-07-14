@@ -77,3 +77,16 @@ passes the disruption/relaunch gate. Review that checkpoint before reducing
 The accepted interactive-chat evidence remains recorded in
 `current-checkpoint.md`; it does not need to be re-proved unless this slice
 changes the shared controller behavior.
+
+## Current implementation evidence
+
+The duplicate server transport/recovery files and their scaffold-preserving
+tests are deleted. Background runs now use the shared controller with a Node
+WebSocket injection; one-shot project, subagent, and pet RPCs use the pinned
+shared gateway client. Focused recovery/repository tests, type checks, and
+architecture ownership checks pass.
+
+This goal is not accepted yet. The remaining critical path is the packaged
+`npm run acceptance:live-railway-coding-run` workflow against the pinned live
+service and a disposable authorized worktree. Do not begin the deferred
+repository/workspace subtraction before that report passes.

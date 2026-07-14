@@ -1,6 +1,5 @@
 {
   "rawRpcCallSites": {
-    "apps/desktop/scripts/electron-uat.mjs": 4,
-    "apps/desktop/src/lib/server/hermes-serve-runs.ts": 8
+    "apps/desktop/scripts/electron-uat.mjs": 4
   }
 }

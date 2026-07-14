@@ -43,10 +43,11 @@ receive one short-lived, single-use Hermes WebSocket URL immediately before it
 opens a physical socket. On reconnect it requests a new URL and resumes by the
 durable Hermes session ID; it never replays a submitted prompt.
 
-`hermes-serve-runs.ts` is the current known exception to this target: it still
-duplicates the socket, transport identity, reconnect, and recovery machinery
-for background coding runs. The active goal removes that exception while
-retaining Companion's worktree authorization and writer-lease responsibilities.
+Background coding runs now compose the same upstream-aligned session controller
+with `hermes-run-coordinator.ts`. The coordinator owns only worktree
+authorization, the writer lease, notifications/audit, and an opaque run ID to
+durable Hermes session ID binding. Its event list is a disposable projection;
+after process loss it is rebuilt from Hermes rather than persisted or replayed.
 
 ## Source-reuse boundary
 

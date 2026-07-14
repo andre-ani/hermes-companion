@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
+  requestHermesGateway,
   UpstreamHermesSessionController,
   type HermesDurableSessionId,
   type HermesSessionSnapshot
@@ -37,6 +38,50 @@ const listen = async (handler: Parameters<WebSocketServer['on']>[1]) => {
 };
 
 describe('upstream Hermes session controller', () => {
+  it('allows an ephemeral chat identity but requires a stored identity for durable creation', async () => {
+    const origin = await listen((socket: WebSocket) => {
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: string; method: string };
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: 'transport-only', messages: [] } }));
+      });
+    });
+    const ephemeral = new UpstreamHermesSessionController({
+      profileId: 'code',
+      socketProvider: { getFreshSocketUrl: async () => origin },
+      socketFactory: (url) => new WebSocket(url) as never
+    });
+    controllers.push(ephemeral);
+    await expect(ephemeral.create({ profileId: 'code' })).resolves.toBe('transport-only');
+
+    const durable = new UpstreamHermesSessionController({
+      profileId: 'code',
+      socketProvider: { getFreshSocketUrl: async () => origin },
+      socketFactory: (url) => new WebSocket(url) as never
+    });
+    controllers.push(durable);
+
+    await expect(durable.create({ profileId: 'code', requireDurableSession: true }))
+      .rejects.toThrow('Hermes did not return a usable session identity.');
+  });
+
+  it('uses the pinned upstream client for one-shot gateway requests', async () => {
+    let tickets = 0;
+    const origin = await listen((socket: WebSocket) => {
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: string; method: string; params: Record<string, unknown> };
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { method: request.method, params: request.params } }));
+      });
+    });
+    const result = await requestHermesGateway<{ method: string; params: Record<string, unknown> }>({
+      profileId: 'code',
+      socketProvider: { getFreshSocketUrl: async () => `${origin}?ticket=${++tickets}` },
+      socketFactory: (url) => new WebSocket(url) as never
+    }, 'projects.list', { archived: false });
+
+    expect(result).toEqual({ method: 'projects.list', params: { archived: false } });
+    expect(tickets).toBe(1);
+  });
+
   it('mints a fresh socket URL, resumes by durable id, reconciles completion, and never replays a prompt', async () => {
     let connections = 0;
     let tickets = 0;

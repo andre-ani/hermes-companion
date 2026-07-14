@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import { HermesProjectTree, HermesProjectTreeNode, ProjectBinding, type GatewayConnection, type HermesProjectTreeNode as HermesProjectTreeNodeValue, type ProjectBinding as ProjectBindingValue } from '@hermes-companion/contracts';
-import { requestHermesServe } from './hermes-serve-runs.js';
+import { requestHermesServe } from './hermes-gateway.js';
 import { normalizeHermesSession } from './hermes-client.js';
 
 type HermesProjectPayload = { active_id?: unknown; projects?: unknown[] };

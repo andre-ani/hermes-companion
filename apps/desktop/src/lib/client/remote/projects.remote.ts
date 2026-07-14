@@ -370,7 +370,7 @@ export const acquireWorktreeWriter = command(z.object({
   const id = crypto.randomUUID();
   await requireActiveWorktree(worktreeId);
   const worktree = await getCompanionRepository().acquireWriter(worktreeId, {
-    id, worktreeId, harness, status: 'starting', startedAt: new Date().toISOString(), finishedAt: null
+    id, worktreeId, harness, durableSessionId: null, startedAt: new Date().toISOString(), finishedAt: null
   });
   return { runId: id, worktree };
 });

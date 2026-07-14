@@ -267,7 +267,7 @@ export const DesktopPreferences = z.object({
 });
 export type DesktopPreferences = z.infer<typeof DesktopPreferences>;
 
-export const WorkspaceDockTab = z.enum(['surfaces', 'files', 'terminal', 'browser', 'changes', 'agents']);
+export const WorkspaceDockTab = z.enum(['surfaces', 'files', 'terminal', 'browser', 'changes', 'agents', 'run']);
 export type WorkspaceDockTab = z.infer<typeof WorkspaceDockTab>;
 
 export const WorkspaceLayoutOwner = z.object({
@@ -294,7 +294,7 @@ export const WorkspaceLayoutPreferences = z.object({
     visible: z.boolean().default(false),
     mode: z.enum(['docked', 'focused']).default('docked'),
     activeTab: WorkspaceDockTab.default('surfaces'),
-    openTabs: z.array(WorkspaceDockTab.exclude(['surfaces'])).max(6).default([]),
+    openTabs: z.array(WorkspaceDockTab.exclude(['surfaces'])).max(7).default([]),
     width: z.number().int().min(280).max(960).default(480)
   }).default({ visible: false, mode: 'docked', activeTab: 'surfaces', openTabs: [], width: 480 }),
   terminal: z.object({
