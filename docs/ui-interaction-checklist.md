@@ -8,8 +8,8 @@
   component durations bypass global preferences.
 - Full-screen preview: Electron view leaves the floating composer visible;
   exit restores dock bounds and chrome.
-- Browser isolation: general tabs cannot read companion/Hermes cookies or invoke
-  preview preload APIs; Design Mode exists only on authorized preview leases.
+- Browser isolation: general and preview tabs cannot read companion/Hermes
+  cookies or invoke privileged renderer APIs.
 - Scaling: at 200% zoom, operations forms, tables, project dialog and composer
   remain usable without clipped actions.
 - Platform passes: VoiceOver/Safari engine on macOS, Narrator/Edge engine on

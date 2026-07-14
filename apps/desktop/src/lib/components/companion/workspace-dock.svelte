@@ -11,24 +11,19 @@
   import CodeReview from './code-review.svelte';
   import TerminalSplit from './terminal-split.svelte';
   import AgentsDock from './agents-dock.svelte';
-  import HarnessPanel from './harness-panel.svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Input } from '$lib/components/ui/input';
-  import { Switch } from '$lib/components/ui/switch';
   import { createWorktreeFileEntry, deleteWorktreeFileEntry, listWorktreeFiles, moveWorktreeFileEntry, previewWorktreeFile, readWorktreeFile, saveWorktreeFile, searchWorktreeFiles } from '$lib/client/remote/files.remote';
   import { listWorktreePreviews, reopenWorktreePreview, startWorktreePreview, stopWorktreePreview } from '$lib/client/remote/previews.remote';
-  import { createWorktreeAnnotation, getAnnotationTaskEvents, listWorktreeAnnotations, startAnnotationTask } from '$lib/client/remote/annotations.remote';
   import { claimBrowser, controlBrowser, getBrowserStatus, openBrowserDevTools, openGeneralBrowser, releaseBrowser, setBrowserBounds, setBrowserFullscreen } from '$lib/client/remote/browser.remote';
   import { resolveRemoteResult } from '$lib/client/remote/resolve-remote-result';
   import { listLocalServers } from '$lib/client/remote/local-servers.remote';
-  import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, ChevronLeft, CircleAlert, CircleCheck, Code2, File, FilePlus2, Folder, FolderPlus, FolderTree, GitCompareArrows, Globe2, Maximize2, Pencil, Play, Plus, RotateCw, Save, Search, Terminal, Trash2, X } from '@lucide/svelte';
-  import type { FileEntry, FilePreview, FileSearchResult, HarnessEvent, HermesGitWorkspace, PreviewLease, WorktreeRecord } from '@hermes-companion/contracts';
-
-  type AnnotationTask = { id: string; route: string; note: string; taskStatus: 'queued' | 'starting' | 'running' | 'completed' | 'cancelled' | 'failed'; runId: string | null; lastEventSequence: number };
+  import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, ChevronLeft, Code2, File, FilePlus2, Folder, FolderPlus, FolderTree, GitCompareArrows, Globe2, Maximize2, Pencil, Play, Plus, RotateCw, Save, Search, Terminal, Trash2, X } from '@lucide/svelte';
+  import type { FileEntry, FilePreview, FileSearchResult, HermesGitWorkspace, PreviewLease, WorktreeRecord } from '@hermes-companion/contracts';
 
   let { worktree = null, gitWorkspace = null, unavailableReason = null, browserOwnerKey, browserLeaseId, visible, onchanged, onfullscreenchange, dockTab = $bindable('surfaces'), openTabs = $bindable<string[]>([]) }: { worktree?: WorktreeRecord | null; gitWorkspace?: HermesGitWorkspace | null; unavailableReason?: string | null; browserOwnerKey: string; browserLeaseId: string; visible: boolean; onchanged?: () => void | Promise<void>; onfullscreenchange?: (fullscreen: boolean, identity: { ownerKey: string; browserLeaseId: string }) => void; dockTab?: string; openTabs?: string[] } = $props();
-  const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : surface === 'run' ? 'Run' : 'Files';
-  const surfaceOptions = [{ id: 'run', label: 'Run', icon: Play }, { id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
+  const surfaceLabel = (surface: string) => surface === 'changes' ? 'Changes' : surface === 'browser' ? 'Browser' : surface === 'terminal' ? 'Terminal' : surface === 'agents' ? 'Agents' : 'Files';
+  const surfaceOptions = [{ id: 'files', label: 'File', icon: File }, { id: 'terminal', label: 'Terminal', icon: Terminal }, { id: 'browser', label: 'Browser', icon: Globe2 }, { id: 'changes', label: 'Changes', icon: GitCompareArrows }, { id: 'agents', label: 'Agents', icon: Bot }];
   let tabMenuOpen = $state(false);
   function openSurface(surface: string) { if (!openTabs.includes(surface)) openTabs = [...openTabs, surface]; dockTab = surface; tabMenuOpen = false; if (surface === 'browser') void refreshBrowserSurface(); }
   async function closeSurface(surface: string) { const index = openTabs.indexOf(surface); if (surface === 'browser') await browserAction('close'); const remaining = openTabs.filter((item) => item !== surface); openTabs = remaining; if (dockTab === surface) dockTab = remaining[index - 1] ?? remaining[index] ?? remaining[0] ?? 'surfaces'; }
@@ -50,15 +45,8 @@
   let loadedWorktreeId = $state<string | null>(null);
   let previews = $state<PreviewLease[]>([]);
   let previewOrigin = $state('');
-  let designMode = $state(false);
   let previewSetupOpen = $state(false);
   let previewPending = $state(false);
-  let annotationCount = $state(0);
-  let annotations = $state<AnnotationTask[]>([]);
-  let annotationEvents = $state<Record<string, Array<{ sequence: number; event: HarnessEvent }>>>({});
-  let annotationTaskTimer: ReturnType<typeof setTimeout> | null = null;
-  let annotationTaskPending = $state<string | null>(null);
-  let removeAnnotationListener: (() => void) | null = null;
   let browserUrl = $state('');
   const closedBrowserState = () => ({ open: false, kind: null, url: null, fullscreen: false, ownerKey: null, browserLeaseId: null } as const);
   let browserState = $state<{ open: boolean; kind: 'general' | 'preview' | null; url: string | null; fullscreen: boolean; ownerKey: string | null; browserLeaseId: string | null }>(closedBrowserState());
@@ -75,9 +63,8 @@
     if (id === loadedWorktreeId) return;
     fileRequestGeneration += 1;
     filesPending = false;
-    loadedWorktreeId = id; currentPath = ''; selectedFile = null; selectedPreview = null; fileDraft = ''; fileSearch = ''; searchResults = []; fileNotice = ''; entries = []; annotations = []; annotationEvents = {}; error = ''; previewSetupOpen = false;
-    if (annotationTaskTimer) clearTimeout(annotationTaskTimer); annotationTaskTimer = null;
-    if (id) { void loadFiles(''); void loadPreviews(); void loadAnnotations(); }
+    loadedWorktreeId = id; currentPath = ''; selectedFile = null; selectedPreview = null; fileDraft = ''; fileSearch = ''; searchResults = []; fileNotice = ''; entries = []; error = ''; previewSetupOpen = false;
+    if (id) { void loadFiles(''); void loadPreviews(); }
     void loadBrowserStatus(); void loadLocalServers();
   });
 
@@ -178,7 +165,7 @@
     try {
       const identity = browserIdentity();
       await resolveRemoteResult(claimBrowser(identity));
-      const lease = await resolveRemoteResult(startWorktreePreview({ worktreeId: worktree.worktreeId, origin: previewOrigin, designModeAllowed: designMode, ttlSeconds: 3_600, ...identity }));
+      const lease = await resolveRemoteResult(startWorktreePreview({ worktreeId: worktree.worktreeId, origin: previewOrigin, ttlSeconds: 3_600, ...identity }));
       if (!isCurrentBrowserIdentity(identity)) return;
       previews = [lease, ...previews.filter((item) => item.id !== lease.id)];
       browserState = { open: true, kind: 'preview', url: lease.relayUrl ?? lease.origin, fullscreen: false, ...identity };
@@ -198,57 +185,6 @@
     try { await resolveRemoteResult(stopWorktreePreview({ leaseId })); previews = previews.filter((item) => item.id !== leaseId); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Preview could not stop.'; }
     finally { previewPending = false; }
-  }
-
-  async function loadAnnotations() {
-    if (!worktree) return;
-    try { annotations = await resolveRemoteResult(listWorktreeAnnotations({ worktreeId: worktree.worktreeId })) as AnnotationTask[]; annotationCount = annotations.length; scheduleAnnotationPoll(0); }
-    catch { annotations = []; annotationCount = 0; }
-  }
-
-  function scheduleAnnotationPoll(delay = 800) {
-    if (!annotations.some((item) => item.runId && ['starting', 'running'].includes(item.taskStatus))) return;
-    if (annotationTaskTimer) clearTimeout(annotationTaskTimer);
-    annotationTaskTimer = setTimeout(pollAnnotationTasks, delay);
-  }
-
-  async function pollAnnotationTasks() {
-    const active = annotations.filter((item) => item.runId && ['starting', 'running'].includes(item.taskStatus));
-    for (const task of active) {
-      try {
-        const existing = annotationEvents[task.id] ?? []; const after = existing.at(-1)?.sequence ?? 0;
-        const result = await resolveRemoteResult(getAnnotationTaskEvents({ annotationId: task.id, after }));
-        if (result.events.length) annotationEvents = { ...annotationEvents, [task.id]: [...existing, ...result.events] };
-        annotations = annotations.map((item) => item.id === task.id ? { ...item, taskStatus: result.status } : item);
-        if (result.status === 'completed') await loadPreviews();
-      } catch (cause) { error = cause instanceof Error ? cause.message : 'Design task events disconnected.'; }
-    }
-    scheduleAnnotationPoll();
-  }
-
-  async function runAnnotationTask(annotationId: string) {
-    if (annotationTaskPending) return;
-    annotationTaskPending = annotationId; error = '';
-    try {
-      const updated = await resolveRemoteResult(startAnnotationTask({ annotationId })) as AnnotationTask;
-      annotations = annotations.map((item) => item.id === annotationId ? updated : item); scheduleAnnotationPoll(0);
-    } catch (cause) { error = cause instanceof Error ? cause.message : 'Design task could not start.'; }
-    finally { annotationTaskPending = null; }
-  }
-
-  function installAnnotationListener() {
-    removeAnnotationListener?.();
-    removeAnnotationListener = window.companion?.onAnnotation((value) => {
-      const annotation = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-      const selected = annotation.selectedElement && typeof annotation.selectedElement === 'object' ? annotation.selectedElement as Record<string, unknown> : {};
-      if (!worktree || typeof annotation.route !== 'string' || typeof annotation.note !== 'string' || typeof selected.selector !== 'string') return;
-      void resolveRemoteResult(createWorktreeAnnotation({
-        route: annotation.route, note: annotation.note,
-        selectedElement: { selector: selected.selector, label: typeof selected.label === 'string' ? selected.label : undefined, attributes: selected.attributes && typeof selected.attributes === 'object' ? selected.attributes as Record<string, string> : {} },
-        ...(typeof annotation.screenshot === 'string' ? { screenshot: annotation.screenshot } : {}),
-        sourceWorktreeId: worktree.worktreeId, targetThreadId: worktree.threadId
-      })).then(() => loadAnnotations()).catch((cause) => { error = cause instanceof Error ? cause.message : 'Annotation delivery failed.'; });
-    }) ?? null;
   }
 
   async function loadBrowserStatus(options: { invalidatePendingOpen?: boolean } = {}) {
@@ -350,7 +286,6 @@
     try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: true, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; browserState.fullscreen = true; onfullscreenchange?.(true, identity); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Full-screen preview failed.'; }
   }
-  $effect(() => { worktree?.worktreeId; installAnnotationListener(); });
   $effect(() => {
     if (typeof window === 'undefined') return;
     const ownerKey = browserOwnerKey;
@@ -371,13 +306,12 @@
     if (browserHost) { browserHostObserver = new ResizeObserver(() => void syncBrowserBounds()); browserHostObserver.observe(browserHost); startBrowserGeometrySync(); }
     return () => { browserHostObserver?.disconnect(); browserHostObserver = null; };
   });
-  onDestroy(() => { removeAnnotationListener?.(); browserHostObserver?.disconnect(); stopBrowserGeometrySync(); if (annotationTaskTimer) clearTimeout(annotationTaskTimer); void releaseBrowserLease(); });
+  onDestroy(() => { browserHostObserver?.disconnect(); stopBrowserGeometrySync(); void releaseBrowserLease(); });
 </script>
 
 {#if dockTab === 'surfaces'}
   <section class="surface-chooser" aria-label="Right panel surfaces">
     <div class="surface-grid">
-      <Button class="surface-card" variant="ghost" onclick={() => openSurface('run')}><Play /><span>Run</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('changes')}><GitCompareArrows /><span>Changes</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('browser')}><Globe2 /><span>Browser</span></Button>
       <Button class="surface-card" variant="ghost" onclick={() => openSurface('terminal')}><Terminal /><span>Terminal</span></Button>
@@ -389,7 +323,7 @@
   <header class="dock-header">
     <Tabs.List variant="line">
       {#each openTabs as surface (surface)}
-        <span class="dock-tab"><Tabs.Trigger value={surface}>{#if surface === 'changes'}<GitCompareArrows />{:else if surface === 'browser'}<Globe2 />{:else if surface === 'terminal'}<Terminal />{:else if surface === 'agents'}<Bot />{:else if surface === 'run'}<Play />{:else}<FolderTree />{/if}{surfaceLabel(surface)}</Tabs.Trigger><Button size="icon-xs" variant="ghost" onclick={() => closeSurface(surface)} aria-label={`Close ${surfaceLabel(surface)} tab`} title={`Close ${surfaceLabel(surface)} tab`}><X /></Button></span>
+        <span class="dock-tab"><Tabs.Trigger value={surface}>{#if surface === 'changes'}<GitCompareArrows />{:else if surface === 'browser'}<Globe2 />{:else if surface === 'terminal'}<Terminal />{:else if surface === 'agents'}<Bot />{:else}<FolderTree />{/if}{surfaceLabel(surface)}</Tabs.Trigger><Button size="icon-xs" variant="ghost" onclick={() => closeSurface(surface)} aria-label={`Close ${surfaceLabel(surface)} tab`} title={`Close ${surfaceLabel(surface)} tab`}><X /></Button></span>
       {/each}
     </Tabs.List>
     <Popover.Root bind:open={tabMenuOpen}>
@@ -437,21 +371,17 @@
     {#if browserState.open}<div class="browser-native-host" bind:this={browserHost} aria-label="Embedded browser viewport"></div>{/if}
     {#if !browserState.open}
     {#if previews[0]}
-      <section class="preview-card" aria-labelledby="preview-title"><div><Globe2 /><div><strong id="preview-title">Worktree preview</strong><span>{previews[0].relayUrl ?? previews[0].origin}</span></div></div><div class="preview-actions"><Badge variant="outline">{annotationCount} annotations</Badge><Badge variant="secondary">{previews[0].designModeAllowed ? 'Design mode' : 'Isolated'}</Badge><Button size="sm" disabled={previewPending} onclick={() => reopenPreview(previews[0].id)}><Play data-icon="inline-start" /> Open preview</Button><Button size="sm" variant="outline" disabled={!browserState.open} onclick={enterFullscreen}><Maximize2 data-icon="inline-start" /> Full screen</Button><Button size="sm" variant="outline" disabled={previewPending} onclick={() => stopPreview(previews[0].id)}>Stop</Button></div></section>
+      <section class="preview-card" aria-labelledby="preview-title"><div><Globe2 /><div><strong id="preview-title">Worktree preview</strong><span>{previews[0].relayUrl ?? previews[0].origin}</span></div></div><div class="preview-actions"><Badge variant="secondary">Isolated</Badge><Button size="sm" disabled={previewPending} onclick={() => reopenPreview(previews[0].id)}><Play data-icon="inline-start" /> Open preview</Button><Button size="sm" variant="outline" disabled={!browserState.open} onclick={enterFullscreen}><Maximize2 data-icon="inline-start" /> Full screen</Button><Button size="sm" variant="outline" disabled={previewPending} onclick={() => stopPreview(previews[0].id)}>Stop</Button></div></section>
     {:else if worktree}
       <section class="preview-launch" aria-labelledby="preview-launch-title"><div><Globe2 /><div><strong id="preview-launch-title">No worktree preview</strong><p>Open an authenticated preview relay only when you need to inspect this coding thread.</p></div></div><Button size="sm" variant="outline" onclick={() => (previewSetupOpen = !previewSetupOpen)} aria-expanded={previewSetupOpen}><Play data-icon="inline-start" /> {previewSetupOpen ? 'Hide preview setup' : 'Configure preview'}</Button></section>
       {#if previewSetupOpen}<form class="preview-form" onsubmit={(event) => { event.preventDefault(); void startPreview(); }}>
         <Field.FieldGroup>
           <Field.Field><Field.FieldLabel for="preview-origin">Preview origin</Field.FieldLabel><Input id="preview-origin" bind:value={previewOrigin} type="url" required /></Field.Field>
-          <Field.Field orientation="horizontal"><div><Field.FieldLabel for="design-mode">Design mode</Field.FieldLabel><Field.FieldDescription>Allow structured annotations on this preview route.</Field.FieldDescription></div><Switch id="design-mode" bind:checked={designMode} /></Field.Field>
         </Field.FieldGroup>
         <Button type="submit" size="sm" disabled={previewPending || !previewOrigin.trim()}><Play data-icon="inline-start" /> {previewPending ? 'Starting…' : 'Start preview'}</Button>
       </form>{/if}
     {:else}
       <Empty.Root><Empty.Header><Empty.Media variant="icon"><Globe2 /></Empty.Media><Empty.Title>No worktree selected</Empty.Title><Empty.Description>{unavailableReason ?? 'Select a coding thread before starting an isolated preview.'}</Empty.Description></Empty.Header></Empty.Root>
-    {/if}
-    {#if annotations.length}
-      <section class="annotation-tasks" aria-labelledby="annotation-tasks-title"><header><div><Bot /><div><strong id="annotation-tasks-title">Design tasks</strong><span>Hermes activity linked to this worktree</span></div></div><Badge variant="outline">{annotations.length}</Badge></header><ol>{#each annotations as task (task.id)}<li><div class="annotation-task-heading">{#if task.taskStatus === 'completed'}<CircleCheck />{:else if task.taskStatus === 'failed' || task.taskStatus === 'cancelled'}<CircleAlert />{:else}<Bot />{/if}<div><strong>{task.route}</strong><span>{task.note}</span></div><Badge variant={task.taskStatus === 'failed' ? 'destructive' : task.taskStatus === 'completed' ? 'secondary' : 'outline'}>{task.taskStatus}</Badge></div>{#if annotationEvents[task.id]?.length}<div class="annotation-stream" aria-live="polite">{#each annotationEvents[task.id].slice(-4) as item (item.sequence)}{#if item.event.type === 'text'}<pre>{item.event.text}</pre>{:else if item.event.type === 'tool'}<span>{item.event.tool.name} · {item.event.tool.status}</span>{:else if item.event.type === 'approval'}<span>Approval required: {item.event.summary}</span>{:else if item.event.type === 'status'}<span>{item.event.status}{item.event.message ? ` · ${item.event.message}` : ''}</span>{/if}{/each}</div>{/if}{#if ['queued', 'failed', 'cancelled'].includes(task.taskStatus)}<Button size="xs" variant="outline" disabled={annotationTaskPending !== null} onclick={() => runAnnotationTask(task.id)}><Play data-icon="inline-start" /> {annotationTaskPending === task.id ? 'Starting…' : 'Run with Hermes'}</Button>{/if}</li>{/each}</ol></section>
     {/if}
     {/if}
   </Tabs.Content>
@@ -488,9 +418,6 @@
     <AgentsDock />
   </Tabs.Content>
 
-  <Tabs.Content value="run" class="dock-panel run-panel">
-    <HarnessPanel {worktree} />
-  </Tabs.Content>
 </Tabs.Root>
 {/if}
 
@@ -555,21 +482,6 @@
   .preview-launch p, .preview-card span { display: block; max-inline-size: 52ch; margin: .16rem 0 0; overflow-wrap: anywhere; color: var(--muted-foreground); font-size: .66rem; line-height: 1.45; }
   .preview-form > :global(button) { justify-self: end; }
   .preview-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .4rem; }
-  .annotation-tasks { display: grid; gap: .45rem; margin-block-start: .55rem; border-block-start: 1px solid var(--border); background: color-mix(in oklab, var(--surface-raised), transparent 30%); }
-  .annotation-tasks > header, .annotation-task-heading { display: flex; align-items: flex-start; gap: .55rem; }
-  .annotation-tasks > header { align-items: center; justify-content: space-between; padding: .5rem .6rem; border-block-end: 1px solid var(--border); }
-  .annotation-tasks > header > div { display: flex; align-items: center; gap: .55rem; }
-  .annotation-tasks :global(svg) { inline-size: .85rem; flex: none; color: var(--muted-foreground); }
-  .annotation-tasks strong, .annotation-tasks span { display: block; }
-  .annotation-tasks strong { font-size: .72rem; }
-  .annotation-tasks span { color: var(--muted-foreground); font-size: .65rem; line-height: 1.45; }
-  .annotation-tasks ol { display: grid; gap: .35rem; margin: 0; padding: .4rem; list-style: none; }
-  .annotation-tasks li { display: grid; gap: .35rem; border-block-start: 1px solid var(--border); padding: .45rem .1rem; }
-  .annotation-task-heading > div { min-inline-size: 0; flex: 1; }
-  .annotation-task-heading > :global(.badge) { margin-inline-start: auto; }
-  .annotation-stream { max-block-size: 8rem; overflow: auto; border-radius: calc(var(--radius) * .65); background: var(--muted); padding: .45rem .55rem; }
-  .annotation-stream pre { margin: 0; white-space: pre-wrap; color: var(--muted-foreground); font-family: var(--font-mono); font-size: .63rem; line-height: 1.45; }
-  .annotation-tasks li > :global(button) { justify-self: end; }
   :global(.files-panel[data-state='active']) { display: grid; grid-template-rows: auto minmax(0, 1fr); }
   .file-editor-panel { min-block-size: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
   .file-browser-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(10rem, 16rem); border-block-end: 1px solid var(--border); }

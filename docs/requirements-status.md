@@ -9,9 +9,8 @@ model.
 | --- | --- | --- |
 | Railway auth and pinned runtime | Password login, fresh ticket minting, encrypted credential persistence, and live Serve probes previously passed. | Retain as Companion-owned; lock image digest to source/submodule revision. |
 | Sessions and chat | The pinned shared gateway client owns the socket; focused tests prove fresh tickets, durable resume, no prompt replay, renderer-controller recreation, event reconciliation, current-transport cancellation/approval, and truthful lost-approval handling. The packaged live Railway workflow passed renderer reload, network interruption, completion, and process relaunch with one prompt and one tool execution. | Accepted for the first subtraction slice. No custom chat control plane remains. |
-| Background coding/harness runs | The duplicate socket/recovery files are deleted. Focused tests prove one durable binding, one prompt submission, process-level coordinator recreation, current-transport approval, transient event reconstruction, exactly-once writer release, and no prompt/transport persistence. Type and architecture checks pass. | Implementation boundary passes; the packaged live Railway disruption/relaunch workflow remains the release gate. |
 | Context, model, approvals, subagents | Context queries on the active upstream controller transport; `session.info` and live approval events project transiently. The packaged live workflow restored context, model, and completion status after both disruptions. Real approval emission remains nondeterministic on the live service. | No Companion persistence authority. The pinned inability to replay a lost approval is registered and presented truthfully. |
-| Projects and worktrees | Hermes project operations plus native/bridge worktree flows have prior evidence. The rejected pre-correction metadata reconstruction is quarantined on `codex/pre-upstream-correction-dirty-snapshot`. | Preserve official Hermes project facts and Companion bridge authorization during the active coding-run slice; reduce synthesized metadata only in a later reviewed checkpoint. |
+| Projects and worktrees | Hermes project operations plus native/bridge worktree flows have prior evidence. The rejected pre-correction metadata reconstruction is quarantined on `codex/pre-upstream-correction-dirty-snapshot`. | Prove the ordinary project/worktree workflow without reconstructing a second Hermes project authority. |
 | Terminal, files, Git, preview, browser | Native/bridge tests and packaged fixture UAT passed. | Companion-owned and out of the first subtraction slice. |
 | Electron shell | Packaged layout, settings, browser ownership, and reload fixture UAT passed. The live gate exposed and fixed a duplicate-process launcher bug; the packaged app now holds a single-instance lock and the acceptance launcher reuses it. | Preserve one Electron owner for the renderer server and native endpoint; remove only page-owned Hermes recovery state. |
 
@@ -25,7 +24,7 @@ ports React application architecture into Svelte.
 
 ## Current gate and deferred work
 
-The background coding/harness-run subtraction in `active-goal.md` is active.
-Repository/workspace subtraction, the remaining ordinary coding loop,
-sleep/wake qualification outside that gate, shared polish, signing, and
-distribution remain deferred until the next accepted checkpoint.
+The stable-daily-driver goal in `active-goal.md` is active. The remaining
+ordinary conversation and coding workflows, one shared polish pass, and
+packaged qualification are the completion path. Signing and distribution remain
+outside this goal.

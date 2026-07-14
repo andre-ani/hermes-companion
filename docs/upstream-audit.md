@@ -65,15 +65,14 @@ currently deployed image. Pin changes require a new diff audit.
 - `hermes-chat-runs.ts`, its polling remote operations, renderer turn maps, and
   the corresponding custom contracts/tests have been removed in the first
   chat slice.
-- `hermes-serve-runs.ts` and `hermes-session-recovery.ts` are deleted. Background
-  runs use the framework-independent upstream-aligned session controller with a
-  Node WebSocket injection and a Companion-owned writer/binding coordinator.
+- `hermes-serve-runs.ts`, `hermes-session-recovery.ts`, and the Companion-owned
+  Run/harness coordinator are deleted. Interactive sessions use the
+  framework-independent upstream-aligned session controller.
 - Project, subagent, pet, and related one-shot calls use
   `packages/hermes-adapter/src/gateway-request.ts`, a direct wrapper around the
   pinned shared `JsonRpcGatewayClient`; no second socket implementation remains.
-- Interactive chat and background runs no longer have custom transport or
-  recovery state machines. Harness and annotation surfaces consume transient
-  projections of the shared controller and rehydrate active runs by durable ID.
+- Interactive chat has no custom transport or recovery state machine. The
+  deleted Run and Design/annotation prototypes are not product requirements.
 - `companion-repository.ts` and session/workspace helpers must retain only
   Companion-owned bindings and presentation, never repair missing Hermes facts.
 - The former dirty workspace reconstruction is preserved only on
@@ -83,6 +82,6 @@ currently deployed image. Pin changes require a new diff audit.
 ## Unique Companion behavior that remains
 
 Railway authentication and fresh ticket minting; encrypted credential custody;
-execution-bridge authentication and path confinement; one-writer worktree
-leases; Electron browser/PTY/Git/files/notifications; preview authorization;
+execution-bridge authentication and path confinement; Electron
+browser/PTY/Git/files/notifications; preview authorization;
 Svelte desktop composition and presentation preferences.

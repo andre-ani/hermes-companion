@@ -25,7 +25,7 @@ export async function ensureThreadWorktree(input: { connectionId?: string; profi
     expectedConnectionId: connectionId
   });
   try {
-    return await repository.addWorktree({ connectionId, profileId, projectId: input.projectId, worktreeId: created.worktreeId ?? crypto.randomUUID(), path: created.path, branch: created.branch, threadId: input.threadId, parentWorktreeId: input.parentWorktreeId ?? null, writerRunId: null, createdAt: new Date().toISOString() });
+    return await repository.addWorktree({ connectionId, profileId, projectId: input.projectId, worktreeId: created.worktreeId ?? crypto.randomUUID(), path: created.path, branch: created.branch, threadId: input.threadId, parentWorktreeId: input.parentWorktreeId ?? null, createdAt: new Date().toISOString() });
   } catch (error) {
     const raced = await repository.getWorktreeForThread(input.threadId, input.projectId, connectionId, profileId);
     if (raced) return raced;
@@ -39,7 +39,6 @@ export async function removeThreadWorktree(worktreeId: string, force = false): P
   const profileId = connection.hermesProfileId ?? 'default';
   const worktree = await repository.getWorktree(worktreeId, connection.id, profileId);
   if (!worktree) throw new Error('Worktree was not found for the active Hermes owner.');
-  if (worktree.writerRunId) throw new Error('Cannot remove a worktree with an active writer.');
   const project = await repository.getProject(worktree.projectId, connection.id);
   if (!project) throw new Error('Project binding was not found.');
   await invokeExecutionHost({

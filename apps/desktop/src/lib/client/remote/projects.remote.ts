@@ -93,7 +93,6 @@ async function attachVerifiedHermesWorktree(
     branch: attached.branch,
     threadId: input.sessionId,
     parentWorktreeId: existing?.parentWorktreeId ?? null,
-    writerRunId: existing?.writerRunId ?? null,
     createdAt: attached.createdAt ?? existing?.createdAt ?? new Date().toISOString()
   });
   return repository.upsertWorktreeBinding(worktree);
@@ -356,29 +355,9 @@ export const mergeChildWorktree = command(z.object({ parentWorktreeId: z.string(
   const parent = worktrees.find((item) => item.worktreeId === parentWorktreeId); const child = worktrees.find((item) => item.worktreeId === childWorktreeId);
   if (!parent || !child) throw new Error('Parent or child worktree was not found.');
   if (child.parentWorktreeId !== parent.worktreeId || child.projectId !== parent.projectId) throw new Error('Child worktree is not linked to this parent.');
-  if (parent.writerRunId || child.writerRunId) throw new Error('Cannot merge while either worktree has an active writer.');
   const result = await invokeExecutionHost<{ stdout: string; stderr: string; alreadyMerged: boolean }>({
     localCapability: 'git.merge', localInput: { parentPath: parent.path, childPath: child.path, childBranch: child.branch, message },
     remoteCapability: 'git', remotePayload: { action: 'git.merge', parentWorktreeId, childWorktreeId, message }, expectedConnectionId: parent.connectionId
   });
   await repository.recordAudit(result.alreadyMerged ? 'worktree.child.already-merged' : 'worktree.child.merged', childWorktreeId, { parentWorktreeId, branch: child.branch }); return result;
-});
-
-export const acquireWorktreeWriter = command(z.object({
-  worktreeId: z.string().min(1), harness: z.literal('hermes')
-}), async ({ worktreeId, harness }) => {
-  const id = crypto.randomUUID();
-  await requireActiveWorktree(worktreeId);
-  const worktree = await getCompanionRepository().acquireWriter(worktreeId, {
-    id, worktreeId, harness, durableSessionId: null, startedAt: new Date().toISOString(), finishedAt: null
-  });
-  return { runId: id, worktree };
-});
-
-export const releaseWorktreeWriter = command(z.object({
-  worktreeId: z.string().min(1), runId: z.string().uuid(), status: z.enum(['completed', 'cancelled', 'failed'])
-}), async ({ worktreeId, runId, status }) => {
-  await requireActiveWorktree(worktreeId);
-  await getCompanionRepository().releaseWriter(worktreeId, runId, status);
-  return { ok: true as const };
 });

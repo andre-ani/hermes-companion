@@ -1,6 +1,6 @@
 import type { CapabilityAvailability, GatewayStatus } from '@hermes-companion/contracts';
 
-const companionFamilies = new Set(['git', 'browser', 'previews', 'annotations', 'harnesses', 'terminal', 'files', 'notifications']);
+const companionFamilies = new Set(['git', 'browser', 'previews', 'terminal', 'files', 'notifications']);
 
 const routeByFamily: Record<string, string> = {
   chat: '/', sessions: '/', projects: '/projects', files: '/files', terminal: '/terminal', memory: '/memory', skills: '/skills',
@@ -9,7 +9,7 @@ const routeByFamily: Record<string, string> = {
   analytics: '/analytics', backup: '/settings/backup', updates: '/settings/updates', health: '/operations', messaging: '/messaging',
   profiles: '/profiles', agents: '/agents', crews: '/crews', conductor: '/conductor', tasks: '/tasks', checkpoints: '/checkpoints',
   reports: '/reports', notifications: '/notifications', git: '/code/review', browser: '/browser', previews: '/browser',
-  annotations: '/annotations', harnesses: '/settings/harnesses', plugins: '/settings/plugins',
+  plugins: '/settings/plugins',
   kanban: '/capabilities/kanban', achievements: '/capabilities/achievements', learning: '/capabilities/learning', artifacts: '/artifacts'
 };
 

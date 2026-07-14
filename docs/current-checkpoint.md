@@ -41,8 +41,7 @@ checkpoint references. They are not the active implementation checkout.
 
 ## Next step
 
-Continue on `main` with the bounded goal in `active-goal.md`: move background
-Hermes coding/harness runs to the upstream-aligned controller and delete the
-remaining custom server transport/recovery layer. Do not revive the deleted
-chat path, merge the quarantined dirty snapshot, or begin repository/workspace
-subtraction in that slice.
+Continue on `main` with the stable-daily-driver goal in `active-goal.md`. Start
+from the simplest packaged P0 conversation workflow, then the ordinary P1
+coding loop. Do not revive the deleted chat path, Run/harness prototype,
+Design/annotation handoff, or quarantined dirty snapshot.

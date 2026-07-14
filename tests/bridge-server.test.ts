@@ -111,7 +111,7 @@ describe('bridge HTTP service', () => {
     await waitFor(`http://127.0.0.1:${bridgePort}/healthz`);
 
     const worktree = await capability(bridgePort, token, 'worktrees', { action: 'worktree.create', projectId: 'project-1', repositoryPath, threadId: 'thread-preview', branch: 'companion/preview-relay', base: 'HEAD' }) as { worktreeId: string };
-    const lease = await capability(bridgePort, token, 'preview', { action: 'preview.start', worktreeId: worktree.worktreeId, origin: `http://127.0.0.1:${previewPort}`, designModeAllowed: true, ttlSeconds: 300 }) as { id: string; relayUrl: string };
+    const lease = await capability(bridgePort, token, 'preview', { action: 'preview.start', worktreeId: worktree.worktreeId, origin: `http://127.0.0.1:${previewPort}`, ttlSeconds: 300 }) as { id: string; relayUrl: string };
     const entryUrl = new URL(lease.relayUrl); entryUrl.pathname += 'nested/route'; entryUrl.searchParams.set('view', '1');
     const exchange = await fetch(entryUrl, { redirect: 'manual' });
     expect(exchange.status).toBe(302);

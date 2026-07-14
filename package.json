@@ -11,8 +11,7 @@
     "check": "npm run check --workspace=@hermes-companion/desktop && npm run check --workspace=@hermes-companion/bridge",
     "test": "vitest run tests",
     "architecture:check": "node scripts/check-architecture.mjs",
-    "acceptance:live-railway-chat": "node scripts/live-railway-chat-recovery-acceptance.mjs",
-    "acceptance:live-railway-coding-run": "node scripts/live-railway-coding-run-recovery-acceptance.mjs"
+    "acceptance:live-railway-chat": "node scripts/live-railway-chat-recovery-acceptance.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

@@ -51,14 +51,10 @@ describe('companion bridge', () => {
     await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.attach', projectId: 'p-1', repositoryPath: repo, worktreePath: arbitrary, threadId: 'session-arbitrary', branch: 'feature/arbitrary' } })).rejects.toThrow('not a registered worktree');
   });
 
-  it('coordinates child writers and merges a clean child through its parent review flow', async () => {
+  it('merges a clean child through its parent review flow', async () => {
     const { repo, bridge } = await fixture();
     const parent = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.create', projectId: 'p-1', repositoryPath: repo, threadId: 'parent-thread', branch: 'companion/parent', base: 'HEAD', parentWorktreeId: null } }) as { worktreeId: string; path: string; branch: string };
     const child = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.create', projectId: 'p-1', repositoryPath: repo, threadId: 'child-thread', branch: 'companion/child', base: parent.branch, parentWorktreeId: parent.worktreeId } }) as { worktreeId: string; path: string };
-    const runId = crypto.randomUUID();
-    await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.writer.acquire', worktreeId: child.worktreeId, runId } });
-    await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'git', payload: { action: 'git.merge', parentWorktreeId: parent.worktreeId, childWorktreeId: child.worktreeId, message: 'Merge child' } })).rejects.toThrow('active writer');
-    await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.writer.release', worktreeId: child.worktreeId, runId } });
     await writeFile(join(child.path, 'child.txt'), 'child work\n'); await exec('git', ['add', 'child.txt'], { cwd: child.path }); await exec('git', ['commit', '-m', 'child work'], { cwd: child.path });
     const merged = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'git', payload: { action: 'git.merge', parentWorktreeId: parent.worktreeId, childWorktreeId: child.worktreeId, message: 'Merge child' } }) as { alreadyMerged: boolean };
     expect(merged.alreadyMerged).toBe(false); expect(await readFile(join(parent.path, 'child.txt'), 'utf8')).toBe('child work\n');
@@ -104,8 +100,8 @@ describe('companion bridge', () => {
   it('authorizes only host-local preview origins by default', async () => {
     const { repo, bridge } = await fixture();
     const worktree = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.create', projectId: 'p-1', repositoryPath: repo, threadId: 'thread-1', branch: 'companion/preview', base: 'HEAD' } }) as { worktreeId: string };
-    await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'preview', payload: { action: 'preview.start', worktreeId: worktree.worktreeId, origin: 'https://example.com', designModeAllowed: true, ttlSeconds: 300 } })).rejects.toThrow('host-local');
-    const lease = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'preview', payload: { action: 'preview.start', worktreeId: worktree.worktreeId, origin: 'http://127.0.0.1:5173', designModeAllowed: true, ttlSeconds: 300 } }) as { id: string };
+    await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'preview', payload: { action: 'preview.start', worktreeId: worktree.worktreeId, origin: 'https://example.com', ttlSeconds: 300 } })).rejects.toThrow('host-local');
+    const lease = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'preview', payload: { action: 'preview.start', worktreeId: worktree.worktreeId, origin: 'http://127.0.0.1:5173', ttlSeconds: 300 } }) as { id: string };
     expect(lease.id).toMatch(/[0-9a-f-]{36}/);
   });
 
@@ -138,17 +134,5 @@ describe('companion bridge', () => {
     await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'files', payload: { action: 'file.write', worktreeId: worktree.worktreeId, path: 'escape.txt', content: 'leak' } })).rejects.toThrow('escaped');
     const outsideDirectory = join(root, 'outside'); await mkdir(outsideDirectory); await symlink(outsideDirectory, join(worktree.path, 'escape-dir'));
     await expect(bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'files', payload: { action: 'file.create', worktreeId: worktree.worktreeId, path: 'escape-dir/leak.txt', kind: 'file' } })).rejects.toThrow('escaped');
-  });
-
-  it('persists validated annotations against the bridge worktree id', async () => {
-    const { repo, bridge } = await fixture();
-    const worktree = await bridge.handle({ version: 'v1', requestId: crypto.randomUUID(), capability: 'worktrees', payload: { action: 'worktree.create', projectId: 'p-1', repositoryPath: repo, threadId: 'thread-design', branch: 'companion/design', base: 'HEAD' } }) as { worktreeId: string };
-    const annotation = await bridge.handle({
-      version: 'v1', requestId: crypto.randomUUID(), capability: 'annotations', payload: { action: 'annotation.create', payload: {
-        route: '/', selectedElement: { selector: '#hero', attributes: {} }, note: 'Reduce the top spacing.',
-        sourceWorktreeId: worktree.worktreeId, targetThreadId: 'thread-design'
-      } }
-    }) as { id: string };
-    expect(annotation.id).toMatch(/[0-9a-f-]{36}/);
   });
 });

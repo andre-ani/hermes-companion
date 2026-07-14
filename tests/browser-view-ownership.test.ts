@@ -140,13 +140,6 @@ describe('native BrowserView ownership', () => {
     expect.soft(/destroyBrowserView\s*\(/.test(release), 'browser.release must use the layout-resetting destroy path').toBe(true);
   });
 
-  it('does not let background annotation refresh attach a native preview', async () => {
-    const annotations = await source('lib/client/remote/annotations.remote.ts');
-
-    expect.soft(/invokeNative\(\s*['"]preview\.register['"]/.test(annotations), 'annotation refresh may register updated preview metadata').toBe(true);
-    expect.soft(/invokeNative\(\s*['"]preview\.open['"]/.test(annotations), 'background annotation refresh must not open or attach a native preview').toBe(false);
-  });
-
   it('releases or detaches the native browser when its dock hides or its owner changes', async () => {
     const [page, dock] = await Promise.all([
       source('routes/+page.svelte'),

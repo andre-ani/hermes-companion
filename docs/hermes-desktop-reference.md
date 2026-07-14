@@ -74,11 +74,10 @@ turn-to-SHA boundary. Companion therefore does not expose Latest turn yet.
 Latest-turn summaries, split view, and word wrap remain pending until their
 real data and rendering paths are implemented.
 
-Cursor remains a visual-polish reference where T3 is less explicit. Its browser
-reference establishes a compact navigation bar, annotation control, browser
-console/DevTools, an overflow menu for reload/screenshot and related actions,
-and recents/favorites. Those controls are pending and must not be shown as inert
-chrome before their Electron browser capabilities exist.
+Cursor remains a visual-polish reference where T3 is less explicit. Its compact
+browser navigation can inform layout, but annotation automation, screenshots,
+history/favorites, and browser parity are outside the current release goal and
+must not be promoted from reference material into product requirements.
 
 ### Pets audit
 

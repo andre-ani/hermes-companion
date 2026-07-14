@@ -56,7 +56,7 @@ Companion's typed implementation is the upstream-aligned controller in
   thread maps to an isolated worktree/branch.
 - Hermes owns profiles, sessions, models, provider credentials, memory, skills,
   MCP, approvals, and execution. Companion/Bridge own workspace presentation,
-  worktrees, PTYs, previews, Git review, and annotations.
+  worktrees, PTYs, previews, and Git review.
 - Every visible action is working, disabled with a precise explanation, or
   absent. Placeholder/decorative controls are prohibited.
 
@@ -230,7 +230,7 @@ the status bar owns the required trigger and the composer may only mirror it.
 | Shell/navigation | `apps/desktop/src/routes/+page.svelte`, `src/app.css` | Flat capability list, duplicated context, local titlebar offsets. |
 | Composer/transcript | `src/lib/components/companion/*chat*`, `src/lib/components/ai-elements/*`, `remote/sessions.remote.ts` | Tall idle composer, decorative context UI, boxed transcript. |
 | Projects | `project-dialog.svelte`, project/worktree remote capabilities | Common create/open feels like administration. |
-| Code/review/dock | `code-review.svelte`, `workspace-dock.svelte`, `file-editor-panel.svelte`, `harness-panel.svelte` | Stacked cards and always-visible preview/dock. |
+| Code/review/dock | `code-review.svelte`, `workspace-dock.svelte`, `file-editor-panel.svelte` | Stacked cards and always-visible preview/dock. |
 | Operations | `operations-center.svelte`, capability registry | Dashboard-shaped permanent leaves. |
 
 Implement in this order:
@@ -239,8 +239,8 @@ Implement in this order:
    swap, master/detail operational destinations, 24px status bar.
 2. `project-dialog.svelte`: compact picker/create flow while retaining typed
    project/worktree commands and Git safety.
-3. Review/harness/dock: one Code header/subnav, review-first dirty state,
-   truthful run gates, contextual collapsible dock.
+3. Review/dock: one Code header/subnav, review-first dirty state, contextual
+   collapsible dock.
 4. Shared Composer/context popover using the existing typed context capability.
 5. Svelte AI Elements adaptation into Hermes timeline primitives.
 6. Operations grouping, then centralized token/height/border cleanup.

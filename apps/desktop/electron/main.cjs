@@ -507,7 +507,7 @@ async function openBrowserView(leaseId, ownerKey, browserLeaseId) {
   destroyBrowserView();
   const previewSession = session.fromPartition(`preview:${lease.worktreeId}:${crypto.randomUUID()}`, { cache: false });
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  const view = new WebContentsView({ webPreferences: { session: previewSession, contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preview-preload.cjs'), additionalArguments: lease.designModeAllowed ? ['--hermes-design-mode'] : [] } });
+  const view = new WebContentsView({ webPreferences: { session: previewSession, contextIsolation: true, sandbox: true, nodeIntegration: false } });
   installOwnedView(view, 'preview', ownerKey, browserLeaseId);
   view.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   view.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== target.origin) event.preventDefault(); });
@@ -899,7 +899,6 @@ if (!app.requestSingleInstanceLock()) {
 
   startupPromise = app.whenReady().then(async () => {
     ipcMain.handle('native:invoke', (_event, capability, input) => dispatchNative(capability, input));
-    ipcMain.on('design:annotation', (_event, annotation) => mainWindow?.webContents.send('design:annotation', annotation));
     await startNativeServer();
     await startRenderer();
     return ensureWindow();

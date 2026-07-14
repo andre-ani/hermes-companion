@@ -29,20 +29,18 @@ export class DefaultCompanionBridge implements CompanionBridge {
     switch (payload.action) {
       case 'project.inspect': return inspectRepository(payload.repositoryPath, payload.initialize);
       case 'worktree.create': {
-        const created = await createWorktree(payload); return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: created.path, branch: created.branch, threadId: payload.threadId, parentWorktreeId: payload.parentWorktreeId, writerRunId: null, createdAt: new Date().toISOString() });
+        const created = await createWorktree(payload); return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: created.path, branch: created.branch, threadId: payload.threadId, parentWorktreeId: payload.parentWorktreeId, createdAt: new Date().toISOString() });
       }
       case 'worktree.attach': {
         const attached = await attachWorktree(payload);
-        return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: attached.path, branch: attached.branch, threadId: payload.threadId, parentWorktreeId: null, writerRunId: null, createdAt: new Date().toISOString() });
+        return this.store.addWorktree({ connectionId: payload.connectionId, profileId: payload.profileId, projectId: payload.projectId, worktreeId: crypto.randomUUID(), path: attached.path, branch: attached.branch, threadId: payload.threadId, parentWorktreeId: null, createdAt: new Date().toISOString() });
       }
       case 'worktree.detach': this.terminals.closeWorktree(payload.worktreeId); await this.store.removeWorktree(payload.worktreeId); return { ok: true };
       case 'worktree.list': return this.store.listWorktrees(payload.connectionId, payload.projectId, payload.profileId);
       case 'worktree.remove': {
-        const worktree = await this.requireWorktree(payload.worktreeId); if (worktree.writerRunId) throw new Error('Cannot remove a worktree with an active writer.');
+        const worktree = await this.requireWorktree(payload.worktreeId);
         await removeWorktree(payload.repositoryPath, worktree.path, payload.force); await this.store.removeWorktree(payload.worktreeId); return { ok: true };
       }
-      case 'worktree.writer.acquire': return this.store.acquireWriter(payload.worktreeId, payload.runId);
-      case 'worktree.writer.release': await this.store.releaseWriter(payload.worktreeId, payload.runId); return { ok: true };
       case 'pty.open': return this.terminals.open(payload);
       case 'pty.write': this.terminals.write(payload.terminalId, payload.data); return { ok: true };
       case 'pty.resize': this.terminals.resize(payload.terminalId, payload.cols, payload.rows); return { ok: true };
@@ -63,7 +61,6 @@ export class DefaultCompanionBridge implements CompanionBridge {
       case 'git.merge': {
         const parent = await this.requireWorktree(payload.parentWorktreeId); const child = await this.requireWorktree(payload.childWorktreeId);
         if (child.parentWorktreeId !== parent.worktreeId || child.projectId !== parent.projectId) throw new Error('Child worktree is not linked to this parent.');
-        if (parent.writerRunId || child.writerRunId) throw new Error('Cannot merge while either worktree has an active writer.');
         return mergeWorktree(parent.path, child.path, child.branch, payload.message);
       }
       case 'file.list': return listFiles((await this.requireWorktree(payload.worktreeId)).path, payload.path);
@@ -77,14 +74,11 @@ export class DefaultCompanionBridge implements CompanionBridge {
       case 'preview.start': {
         const worktree = await this.requireWorktree(payload.worktreeId); const origin = validatePreviewOrigin(payload.origin); const id = crypto.randomUUID(); const accessToken = randomBytes(32).toString('base64url');
         const publicUrl = (process.env.BRIDGE_PUBLIC_URL ?? '').replace(/\/$/, ''); const relayUrl = publicUrl ? `${publicUrl}/preview/${id}/?token=${accessToken}` : null;
-        const stored = await this.store.addPreview({ id, worktreeId: worktree.worktreeId, origin: origin.toString(), relayUrl, designModeAllowed: payload.designModeAllowed, expiresAt: new Date(Date.now() + payload.ttlSeconds * 1_000).toISOString(), accessToken });
+        const stored = await this.store.addPreview({ id, worktreeId: worktree.worktreeId, origin: origin.toString(), relayUrl, expiresAt: new Date(Date.now() + payload.ttlSeconds * 1_000).toISOString(), accessToken });
         const { accessToken: _, ...lease } = stored; return lease;
       }
       case 'preview.stop': await this.store.removePreview(payload.leaseId); return { ok: true };
       case 'preview.list': return (await this.store.listPreviews(payload.worktreeId)).map(({ accessToken: _, ...lease }) => lease);
-      case 'annotation.create': {
-        await this.requireWorktree(payload.payload.sourceWorktreeId); return this.store.addAnnotation(payload.payload);
-      }
     }
   }
 

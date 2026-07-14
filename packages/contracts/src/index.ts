@@ -267,7 +267,7 @@ export const DesktopPreferences = z.object({
 });
 export type DesktopPreferences = z.infer<typeof DesktopPreferences>;
 
-export const WorkspaceDockTab = z.enum(['surfaces', 'files', 'terminal', 'browser', 'changes', 'agents', 'run']);
+export const WorkspaceDockTab = z.enum(['surfaces', 'files', 'terminal', 'browser', 'changes', 'agents']);
 export type WorkspaceDockTab = z.infer<typeof WorkspaceDockTab>;
 
 export const WorkspaceLayoutOwner = z.object({
@@ -294,7 +294,7 @@ export const WorkspaceLayoutPreferences = z.object({
     visible: z.boolean().default(false),
     mode: z.enum(['docked', 'focused']).default('docked'),
     activeTab: WorkspaceDockTab.default('surfaces'),
-    openTabs: z.array(WorkspaceDockTab.exclude(['surfaces'])).max(7).default([]),
+    openTabs: z.array(WorkspaceDockTab.exclude(['surfaces'])).max(6).default([]),
     width: z.number().int().min(280).max(960).default(480)
   }).default({ visible: false, mode: 'docked', activeTab: 'surfaces', openTabs: [], width: 480 }),
   terminal: z.object({
@@ -574,11 +574,6 @@ export const ContextUsage = z.object({
 });
 export type ContextUsage = z.infer<typeof ContextUsage>;
 
-// Hermes is the sole agent runtime. Provider/CLI credentials are connected
-// through Hermes and must never be treated as independently launchable peers.
-export const HarnessId = z.literal('hermes');
-export type HarnessId = z.infer<typeof HarnessId>;
-
 export const WorktreeContext = z.object({
   projectId: z.string().min(1),
   worktreeId: z.string().min(1),
@@ -586,34 +581,6 @@ export const WorktreeContext = z.object({
   branch: z.string().min(1)
 });
 export type WorktreeContext = z.infer<typeof WorktreeContext>;
-
-export const HarnessCapabilities = z.object({
-  id: HarnessId,
-  displayName: z.string().min(1),
-  installed: z.boolean(),
-  authenticated: z.boolean(),
-  supportsStructuredApprovals: z.boolean(),
-  supportsStreaming: z.boolean(),
-  supportsWorktrees: z.boolean(),
-  supportsNativeFallback: z.boolean()
-});
-export type HarnessCapabilities = z.infer<typeof HarnessCapabilities>;
-
-export const StartRunInput = z.object({
-  harness: HarnessId,
-  prompt: z.string().trim().min(1).max(20_000),
-  worktree: WorktreeContext
-});
-export type StartRunInput = z.infer<typeof StartRunInput>;
-
-export const HarnessEvent = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('status'), status: z.enum(['starting', 'running', 'completed', 'cancelled', 'failed']), message: z.string().optional() }),
-  z.object({ type: z.literal('text'), text: z.string() }),
-  z.object({ type: z.literal('tool'), tool: ToolCall }),
-  z.object({ type: z.literal('approval'), approvalId: z.string(), summary: z.string(), nativeFallback: z.boolean(), allowPermanent: z.boolean().default(true) }),
-  z.object({ type: z.literal('git'), commit: z.string().optional(), filesChanged: z.number().int().nonnegative() })
-]);
-export type HarnessEvent = z.infer<typeof HarnessEvent>;
 
 export const ProjectBinding = z.object({
   id: z.string().min(1),
@@ -633,7 +600,6 @@ export const WorktreeRecord = WorktreeContext.extend({
   profileId: z.string().min(1).default('legacy-unscoped'),
   threadId: z.string().min(1),
   parentWorktreeId: z.string().min(1).nullable().default(null),
-  writerRunId: z.string().nullable(),
   createdAt: z.string().datetime()
 });
 export type WorktreeRecord = z.infer<typeof WorktreeRecord>;
@@ -734,19 +700,9 @@ export const PreviewLease = z.object({
   worktreeId: z.string().min(1),
   origin: z.string().url(),
   relayUrl: z.string().url().nullable(),
-  designModeAllowed: z.boolean(),
   expiresAt: z.string().datetime()
 });
 export type PreviewLease = z.infer<typeof PreviewLease>;
-
-export const AnnotationPayload = z.object({
-  route: z.string().startsWith('/'),
-  selectedElement: z.object({ selector: z.string().min(1), label: z.string().optional(), attributes: z.record(z.string(), z.string()).default({}) }),
-  screenshot: z.string().url().optional(),
-  note: z.string().trim().min(1).max(5_000),
-  sourceWorktreeId: z.string().min(1),
-  targetThreadId: z.string().min(1)
-});
 
 export const FileEntry = z.object({
   name: z.string().min(1),
@@ -840,20 +796,11 @@ export const HermesInsightsOverview = z.object({
 });
 export type HermesInsightsOverview = z.infer<typeof HermesInsightsOverview>;
 
-export const ApprovalEvent = z.object({
-  id: z.string().min(1),
-  runId: z.string().min(1),
-  worktreeId: z.string().min(1),
-  summary: z.string().min(1),
-  source: z.enum(['hermes', 'harness']),
-  nativeFallback: z.boolean().default(false)
-});
-
 export const CapabilityFamily = z.enum([
   'chat', 'sessions', 'profiles', 'projects', 'files', 'terminal', 'memory', 'skills', 'mcp', 'models', 'artifacts',
   'credentials', 'toolsets', 'permissions', 'approvals', 'jobs', 'webhooks', 'audit', 'analytics', 'backup',
   'updates', 'health', 'messaging', 'agents', 'crews', 'conductor', 'tasks', 'checkpoints', 'reports', 'notifications',
-  'git', 'browser', 'previews', 'annotations', 'harnesses', 'plugins', 'kanban', 'achievements', 'learning'
+  'git', 'browser', 'previews', 'plugins', 'kanban', 'achievements', 'learning'
 ]);
 export type CapabilityFamily = z.infer<typeof CapabilityFamily>;
 
@@ -869,7 +816,7 @@ export type CapabilityAvailability = z.infer<typeof CapabilityAvailability>;
 export const BridgeEnvelope = z.object({
   version: z.literal('v1'),
   requestId: z.string().uuid(),
-  capability: z.enum(['projects', 'worktrees', 'pty', 'git', 'files', 'preview', 'annotations']),
+  capability: z.enum(['projects', 'worktrees', 'pty', 'git', 'files', 'preview']),
   payload: z.discriminatedUnion('action', [
     z.object({ action: z.literal('project.inspect'), repositoryPath: z.string().min(1), initialize: z.boolean().default(false) }),
     z.object({ action: z.literal('worktree.create'), connectionId: z.string().min(1).default('legacy-unscoped'), profileId: z.string().min(1).default('legacy-unscoped'), projectId: z.string().min(1), repositoryPath: z.string().min(1), threadId: z.string().min(1), branch: z.string().min(1), base: z.string().min(1).default('HEAD'), parentWorktreeId: z.string().min(1).nullable().default(null) }),
@@ -877,8 +824,6 @@ export const BridgeEnvelope = z.object({
     z.object({ action: z.literal('worktree.detach'), worktreeId: z.string().min(1) }),
     z.object({ action: z.literal('worktree.list'), connectionId: z.string().min(1).default('legacy-unscoped'), profileId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }),
     z.object({ action: z.literal('worktree.remove'), repositoryPath: z.string().min(1), worktreeId: z.string().min(1), force: z.boolean().default(false) }),
-    z.object({ action: z.literal('worktree.writer.acquire'), worktreeId: z.string().min(1), runId: z.string().uuid() }),
-    z.object({ action: z.literal('worktree.writer.release'), worktreeId: z.string().min(1), runId: z.string().uuid() }),
     z.object({ action: z.literal('pty.open'), worktreeId: z.string().min(1), cols: z.number().int().min(20).max(500).default(100), rows: z.number().int().min(5).max(200).default(30), shell: z.string().optional() }),
     z.object({ action: z.literal('pty.write'), terminalId: z.string().uuid(), data: z.string().max(64_000) }),
     z.object({ action: z.literal('pty.resize'), terminalId: z.string().uuid(), cols: z.number().int().min(20).max(500), rows: z.number().int().min(5).max(200) }),
@@ -905,14 +850,13 @@ export const BridgeEnvelope = z.object({
     z.object({ action: z.literal('file.move'), worktreeId: z.string().min(1), from: z.string().min(1).max(4_096), to: z.string().min(1).max(4_096) }),
     z.object({ action: z.literal('file.delete'), worktreeId: z.string().min(1), path: z.string().min(1).max(4_096), recursive: z.boolean().default(false) }),
     z.object({ action: z.literal('file.preview'), worktreeId: z.string().min(1), path: z.string().min(1).max(4_096) }),
-    z.object({ action: z.literal('preview.start'), worktreeId: z.string().min(1), origin: z.string().url(), designModeAllowed: z.boolean().default(false), ttlSeconds: z.number().int().min(60).max(86_400).default(3_600) }),
+    z.object({ action: z.literal('preview.start'), worktreeId: z.string().min(1), origin: z.string().url(), ttlSeconds: z.number().int().min(60).max(86_400).default(3_600) }),
     z.object({ action: z.literal('preview.stop'), leaseId: z.string().uuid() }),
-    z.object({ action: z.literal('preview.list'), worktreeId: z.string().min(1).optional() }),
-    z.object({ action: z.literal('annotation.create'), payload: AnnotationPayload })
+    z.object({ action: z.literal('preview.list'), worktreeId: z.string().min(1).optional() })
   ])
 }).superRefine((value, context) => {
   const expected = value.payload.action.split('.')[0];
-  const category = expected === 'project' ? 'projects' : expected === 'worktree' ? 'worktrees' : expected === 'file' ? 'files' : expected === 'annotation' ? 'annotations' : expected;
+  const category = expected === 'project' ? 'projects' : expected === 'worktree' ? 'worktrees' : expected === 'file' ? 'files' : expected;
   if (category !== value.capability) context.addIssue({ code: 'custom', path: ['capability'], message: `Capability must be ${category} for ${value.payload.action}.` });
 });
 export type BridgeEnvelope = z.infer<typeof BridgeEnvelope>;

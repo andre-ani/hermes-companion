@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AnnotationPayload, BridgeEnvelope, DesktopPreferences, HERMES_API_CAPABILITY_CONTRACT_V1, HermesActionStatus, HermesApiCapabilitiesDescriptor, StartRunInput, SupportedHermesApiCapabilityContract } from '@hermes-companion/contracts';
+import { BridgeEnvelope, DesktopPreferences, HERMES_API_CAPABILITY_CONTRACT_V1, HermesActionStatus, HermesApiCapabilitiesDescriptor, SupportedHermesApiCapabilityContract } from '@hermes-companion/contracts';
 
 describe('companion contracts', () => {
   it('does not expose a fixture mode in desktop preferences', () => {
@@ -7,29 +7,10 @@ describe('companion contracts', () => {
     expect(DesktopPreferences.parse({ development: { dataMode: 'fixtures' } })).not.toHaveProperty('development');
   });
 
-  it('requires a scoped worktree for every Hermes background run', () => {
-    expect(() => StartRunInput.parse({ harness: 'hermes', prompt: 'Ship it' })).toThrow();
-  });
-
   it('pins verified Hermes capability discovery to an explicit supported contract', () => {
     expect(SupportedHermesApiCapabilityContract.parse(HERMES_API_CAPABILITY_CONTRACT_V1)).toBe(HERMES_API_CAPABILITY_CONTRACT_V1);
     expect(() => SupportedHermesApiCapabilityContract.parse('hermes.api_server.capabilities/v2')).toThrow();
     expect(HermesApiCapabilitiesDescriptor.parse({ object: 'hermes.api_server.capabilities', features: {}, endpoints: {} }).object).toBe('hermes.api_server.capabilities');
-  });
-
-  it('rejects provider CLIs as companion-owned runtimes', () => {
-    const worktree = { projectId: 'p-1', worktreeId: 'wt-1', path: '/tmp/wt-1', branch: 'task/wt-1' };
-    for (const harness of ['codex', 'claude-code', 'opencode', 'cursor']) {
-      expect(() => StartRunInput.parse({ harness, prompt: 'Ship it', worktree })).toThrow();
-    }
-  });
-
-  it('keeps annotation delivery auditable and worktree-scoped', () => {
-    const annotation = AnnotationPayload.parse({
-      route: '/settings', selectedElement: { selector: '[data-setting="model"]' }, note: 'Clarify this option',
-      sourceWorktreeId: 'wt-1', targetThreadId: 'thread-1'
-    });
-    expect(annotation.sourceWorktreeId).toBe('wt-1');
   });
 
   it('versions all bridge capability envelopes', () => {

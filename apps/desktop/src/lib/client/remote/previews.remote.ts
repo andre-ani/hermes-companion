@@ -15,20 +15,20 @@ export const listWorktreePreviews = query(worktreeId, async ({ worktreeId }) => 
 
 export const startWorktreePreview = command(worktreeId.merge(browserIdentity).extend({
   origin: z.string().url().refine((value) => new URL(value).protocol === 'http:', 'Preview origin must use HTTP'),
-  designModeAllowed: z.boolean().default(false), ttlSeconds: z.number().int().min(60).max(86_400).default(3_600)
-}), async ({ worktreeId, origin, designModeAllowed, ttlSeconds, ownerKey, browserLeaseId }) => {
+  ttlSeconds: z.number().int().min(60).max(86_400).default(3_600)
+}), async ({ worktreeId, origin, ttlSeconds, ownerKey, browserLeaseId }) => {
   const repository = getCompanionRepository();
   const worktree = await requireActiveWorktree(worktreeId);
   const host = requireExecutionHost(worktree.connectionId);
   let lease: z.infer<typeof PreviewLease>;
   if (host.connection.kind === 'remote') {
     if (!host.bridge) throw new Error('Remote previews require an authenticated companion bridge.');
-    lease = PreviewLease.parse(await host.bridge.invoke('preview', { action: 'preview.start', worktreeId, origin, designModeAllowed, ttlSeconds }));
+    lease = PreviewLease.parse(await host.bridge.invoke('preview', { action: 'preview.start', worktreeId, origin, ttlSeconds }));
     if (!lease.relayUrl) throw new Error('The remote bridge has no public preview relay URL configured.');
   } else {
     const target = new URL(origin);
     if (!['127.0.0.1', 'localhost', '::1'].includes(target.hostname)) throw new Error('Local previews must use a loopback origin.');
-    lease = { id: crypto.randomUUID(), worktreeId, origin: target.toString(), relayUrl: null, designModeAllowed, expiresAt: new Date(Date.now() + ttlSeconds * 1_000).toISOString() };
+    lease = { id: crypto.randomUUID(), worktreeId, origin: target.toString(), relayUrl: null, expiresAt: new Date(Date.now() + ttlSeconds * 1_000).toISOString() };
   }
   assertActiveWorktreeOwner(worktree);
   await invokeNative('preview.register', lease);

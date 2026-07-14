@@ -80,7 +80,7 @@ describe('CompanionRepository', () => {
     await writeFile(file, JSON.stringify({
       version: 1, activeConnectionId: 'default',
       connections: [{ id: 'default', name: 'Hermes Agent', description: '', kind: 'local', url: 'http://127.0.0.1:8642', controlUrl: null, serveUrl: null, serveWsUrl: null, bridgeUrl: null, hermesProfileId: null }],
-      projects: [], worktrees: [], runs: [], annotations: [], previews: [], profileUi: {}, pinnedSessionIds: [], archivedSessionIds: [], unreadSessionIds: [], audit: [],
+      projects: [], worktrees: [], previews: [], profileUi: {}, pinnedSessionIds: [], archivedSessionIds: [], unreadSessionIds: [], audit: [],
       workspaceLayouts: {
         [JSON.stringify(['default', 'default', ['session', 'valid']])]: { inspector: { visible: true, mode: 'docked', activeTab: 'files', openTabs: ['files'], width: 500 }, terminal: { visible: false, height: 260 } },
         [JSON.stringify(['default', 'default', ['session', 'bad']])]: { inspector: { width: 'impossible' } }
@@ -95,7 +95,7 @@ describe('CompanionRepository', () => {
   it('persists only companion-owned project and worktree metadata', async () => {
     const repo = await repository();
     await repo.upsertProject({ id: 'p-1', name: 'Companion', repositoryPath: '/repo', remoteUrl: null, defaultBranch: 'main', connectionId: 'default' });
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', writerRunId: null, createdAt: new Date().toISOString() });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', createdAt: new Date().toISOString() });
     expect(await repo.listProjects()).toEqual([expect.objectContaining({ id: 'p-1' })]);
     expect(await repo.listWorktrees('p-1')).toEqual([expect.objectContaining({ worktreeId: 'wt-1' })]);
   });
@@ -129,8 +129,8 @@ describe('CompanionRepository', () => {
       version: 1, activeConnectionId: 'default',
       connections: [{ id: 'default', name: 'Hermes Agent', description: '', kind: 'local', url: 'http://127.0.0.1:8642', controlUrl: null, serveUrl: null, serveWsUrl: null, bridgeUrl: null, hermesProfileId: null }],
       projects: [],
-      worktrees: [{ projectId: 'p-1', worktreeId: 'legacy', path: '/legacy', branch: 'legacy', threadId: 'legacy-thread', writerRunId: null, createdAt: new Date().toISOString() }],
-      runs: [], annotations: [], previews: [], audit: []
+      worktrees: [{ projectId: 'p-1', worktreeId: 'legacy', path: '/legacy', branch: 'legacy', threadId: 'legacy-thread', createdAt: new Date().toISOString() }],
+      previews: [], audit: []
     }));
     const repo = new CompanionRepository(file);
     expect(await repo.listWorktrees(undefined, 'default', 'default')).toEqual([]);
@@ -148,26 +148,16 @@ describe('CompanionRepository', () => {
     expect(await repo.getProfileUi('railway:default')).toMatchObject({ sessionPresentation: 'sessions' });
   });
 
-  it('enforces one active writer per worktree', async () => {
-    const repo = await repository();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', writerRunId: null, createdAt: new Date().toISOString() });
-    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', durableSessionId: null, startedAt: new Date().toISOString(), finishedAt: null };
-    await repo.acquireWriter('wt-1', run);
-    await expect(repo.acquireWriter('wt-1', { ...run, id: crypto.randomUUID() })).rejects.toThrow('active writer');
-    await repo.releaseWriter('wt-1', run.id, 'completed');
-    expect((await repo.listWorktrees())[0].writerRunId).toBeNull();
-  });
-
   it('binds at most one worktree to a Hermes session in each project', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt-1', branch: 'companion/session-1', threadId: 'session-1', writerRunId: null, createdAt });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt-1', branch: 'companion/session-1', threadId: 'session-1', createdAt });
     expect((await repo.getWorktreeForThread('session-1', 'p-1', owner.connectionId, owner.profileId))?.worktreeId).toBe('wt-1');
-    await expect(repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-2', path: '/repo-wt-2', branch: 'companion/session-1-copy', threadId: 'session-1', writerRunId: null, createdAt })).rejects.toThrow('already has a worktree');
+    await expect(repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-2', path: '/repo-wt-2', branch: 'companion/session-1-copy', threadId: 'session-1', createdAt })).rejects.toThrow('already has a worktree');
   });
 
   it('isolates session worktrees by connection and profile ownership', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
-    const first = { ...owner, projectId: 'shared-project', worktreeId: 'wt-a', path: '/host-a/repo', branch: 'feature/a', threadId: 'shared-session', writerRunId: null, createdAt };
+    const first = { ...owner, projectId: 'shared-project', worktreeId: 'wt-a', path: '/host-a/repo', branch: 'feature/a', threadId: 'shared-session', createdAt };
     const second = { ...first, connectionId: 'railway-b', profileId: 'code', worktreeId: 'wt-b', path: '/host-b/repo', branch: 'feature/b' };
     await repo.addWorktree(first);
     await repo.addWorktree(second);
@@ -178,63 +168,31 @@ describe('CompanionRepository', () => {
 
   it('rejects duplicate physical worktree paths within one execution host', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/same/path', branch: 'one', threadId: 'session-1', writerRunId: null, createdAt });
-    await expect(repo.addWorktree({ ...owner, profileId: 'code', projectId: 'p-2', worktreeId: 'wt-2', path: '/same/path', branch: 'two', threadId: 'session-2', writerRunId: null, createdAt })).rejects.toThrow('path is already bound');
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/same/path', branch: 'one', threadId: 'session-1', createdAt });
+    await expect(repo.addWorktree({ ...owner, profileId: 'code', projectId: 'p-2', worktreeId: 'wt-2', path: '/same/path', branch: 'two', threadId: 'session-2', createdAt })).rejects.toThrow('path is already bound');
   });
 
   it('repairs a session worktree binding only through the explicit upsert path', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'stale', path: '/old', branch: 'old', threadId: 'session-1', writerRunId: null, createdAt });
-    const repaired = await repo.upsertWorktreeBinding({ ...owner, projectId: 'p-1', worktreeId: 'verified', path: '/repo-wt', branch: 'feature/verified', threadId: 'session-1', writerRunId: null, createdAt });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'stale', path: '/old', branch: 'old', threadId: 'session-1', createdAt });
+    const repaired = await repo.upsertWorktreeBinding({ ...owner, projectId: 'p-1', worktreeId: 'verified', path: '/repo-wt', branch: 'feature/verified', threadId: 'session-1', createdAt });
     expect(repaired).toMatchObject({ worktreeId: 'verified', path: '/repo-wt', branch: 'feature/verified' });
     expect(await repo.listWorktrees('p-1')).toEqual([expect.objectContaining({ worktreeId: 'verified', threadId: 'session-1' })]);
-    await expect(repo.upsertWorktreeBinding({ ...owner, projectId: 'p-2', worktreeId: 'verified', path: '/other', branch: 'other', threadId: 'session-2', writerRunId: null, createdAt })).rejects.toThrow('another Hermes session');
-  });
-
-  it('does not move an active writer even when the repaired binding keeps its identifier', async () => {
-    const repo = await repository(); const createdAt = new Date().toISOString();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/before', branch: 'before', threadId: 'session-1', writerRunId: null, createdAt });
-    const run = { id: crypto.randomUUID(), worktreeId: 'wt-1', harness: 'hermes', durableSessionId: null, startedAt: createdAt, finishedAt: null };
-    await repo.acquireWriter('wt-1', run);
-    await expect(repo.upsertWorktreeBinding({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/after', branch: 'after', threadId: 'session-1', writerRunId: run.id, createdAt })).rejects.toThrow('active writer');
+    await expect(repo.upsertWorktreeBinding({ ...owner, projectId: 'p-2', worktreeId: 'verified', path: '/other', branch: 'other', threadId: 'session-2', createdAt })).rejects.toThrow('another Hermes session');
   });
 
   it('fails truthfully when removing a worktree from the wrong owner', async () => {
     const repo = await repository();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/owned', branch: 'owned', threadId: 'session-1', writerRunId: null, createdAt: new Date().toISOString() });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/owned', branch: 'owned', threadId: 'session-1', createdAt: new Date().toISOString() });
     await expect(repo.removeWorktree('wt-1', 'railway')).rejects.toThrow('requested owner');
     expect(await repo.getWorktree('wt-1', owner.connectionId, owner.profileId)).not.toBeNull();
   });
 
   it('links child worktrees only to top-level parents in the same project', async () => {
     const repo = await repository(); const createdAt = new Date().toISOString();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'parent', path: '/parent', branch: 'companion/parent', threadId: 'parent-thread', parentWorktreeId: null, writerRunId: null, createdAt });
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'child', path: '/child', branch: 'companion/child', threadId: 'child-thread', parentWorktreeId: 'parent', writerRunId: null, createdAt });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'parent', path: '/parent', branch: 'companion/parent', threadId: 'parent-thread', parentWorktreeId: null, createdAt });
+    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'child', path: '/child', branch: 'companion/child', threadId: 'child-thread', parentWorktreeId: 'parent', createdAt });
     expect((await repo.listWorktrees()).find((item) => item.worktreeId === 'child')?.parentWorktreeId).toBe('parent');
-    await expect(repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'nested', path: '/nested', branch: 'companion/nested', threadId: 'nested-thread', parentWorktreeId: 'child', writerRunId: null, createdAt })).rejects.toThrow('top-level parent');
-  });
-
-  it('stores structured design annotations with their worktree and target thread', async () => {
-    const repo = await repository();
-    await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', writerRunId: null, createdAt: new Date().toISOString() });
-    const annotation = await repo.addAnnotation({
-      route: '/settings', selectedElement: { selector: 'button[data-save]', label: 'Save', attributes: { 'data-save': '' } },
-      note: 'Align this control with the header.', sourceWorktreeId: 'wt-1', targetThreadId: 't-1'
-    });
-    expect(annotation.id).toMatch(/[0-9a-f-]{36}/);
-    expect(await repo.listAnnotations('wt-1')).toEqual([expect.objectContaining({ route: '/settings', targetThreadId: 't-1', taskStatus: 'queued', runId: null })]);
-    const runId = crypto.randomUUID();
-    await repo.updateAnnotationTask(annotation.id, { taskStatus: 'running', runId, lastEventSequence: 3 });
-    expect(await repo.getAnnotationForRun(runId)).toEqual(expect.objectContaining({ id: annotation.id, taskStatus: 'running', lastEventSequence: 3 }));
-    await repo.updateAnnotationTask(annotation.id, { taskStatus: 'completed', lastEventSequence: 5 });
-    expect(await repo.getAnnotation(annotation.id)).toEqual(expect.objectContaining({ taskStatus: 'completed', finishedAt: expect.any(String), lastEventSequence: 5 }));
-  });
-
-  it('migrates legacy annotation records without resetting companion state', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'hermes-companion-')); paths.push(directory); const file = join(directory, 'state.json');
-    const annotationId = crypto.randomUUID();
-    await writeFile(file, JSON.stringify({ version: 1, activeConnectionId: null, connections: [], projects: [], worktrees: [], runs: [], previews: [], audit: [], annotations: [{ id: annotationId, worktreeId: 'wt-old', threadId: 'thread-old', route: '/', selector: '#hero', note: 'Legacy', screenshot: null, createdAt: new Date().toISOString() }] }));
-    const repo = new CompanionRepository(file);
-    expect(await repo.listAnnotations('wt-old')).toEqual([expect.objectContaining({ id: annotationId, sourceWorktreeId: 'wt-old', selectedElement: { selector: '#hero', attributes: {} }, taskStatus: 'queued', runId: null })]);
+    await expect(repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'nested', path: '/nested', branch: 'companion/nested', threadId: 'nested-thread', parentWorktreeId: 'child', createdAt })).rejects.toThrow('top-level parent');
   });
 });

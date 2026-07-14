@@ -10,10 +10,5 @@ contextBridge.exposeInMainWorld('companion', {
   invoke: (capability, input) => {
     if (!allowed.has(capability)) return Promise.reject(new Error('Capability is not exposed to the renderer.'));
     return ipcRenderer.invoke('native:invoke', capability, input);
-  },
-  onAnnotation: (callback) => {
-    const handler = (_event, value) => callback(value);
-    ipcRenderer.on('design:annotation', handler);
-    return () => ipcRenderer.removeListener('design:annotation', handler);
   }
 });

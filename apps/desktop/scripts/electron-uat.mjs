@@ -229,7 +229,7 @@ await writeFile(join(stateDir, 'state.json'), JSON.stringify({
   activeConnectionId: 'default',
   connections: [{ id: 'default', name: 'Hermes', kind: 'local', url: mockHermesUrl, controlUrl: mockHermesUrl, serveWsUrl: `ws://127.0.0.1:${serveAddress.port}`, bridgeUrl: null, hermesProfileId: null }],
   projects: [{ id: 'uat-project', name: 'Electron UAT', repositoryPath: repositoryDir, remoteUrl: null, defaultBranch: 'main', connectionId: 'default' }],
-  worktrees: [{ connectionId: 'default', profileId: 'default', projectId: 'uat-project', worktreeId: 'uat-worktree', path: worktreeDir, branch: 'companion/uat-session', threadId: 'uat-session', parentWorktreeId: null, writerRunId: null, createdAt: '2026-07-11T09:00:00.000Z' }], runs: [], annotations: [], previews: [], audit: []
+  worktrees: [{ connectionId: 'default', profileId: 'default', projectId: 'uat-project', worktreeId: 'uat-worktree', path: worktreeDir, branch: 'companion/uat-session', threadId: 'uat-session', parentWorktreeId: null, createdAt: '2026-07-11T09:00:00.000Z' }], previews: [], audit: []
 }, null, 2));
 
 const child = spawn(electron, [desktop], { cwd: desktop, stdio: 'inherit', env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}`, HERMES_COMPANION_UAT: '1', HERMES_COMPANION_UAT_REPORT_DIR: reportDir, HERMES_COMPANION_UAT_BROWSER_URL: `${mockHermesUrl}/uat/browser`, HERMES_COMPANION_UAT_REPOSITORY: repositoryDir, HERMES_COMPANION_UAT_WORKTREE: nativeWorktreeDir, HERMES_COMPANION_RENDERER_URL: `http://127.0.0.1:${port}`, HERMES_API_URL: `http://127.0.0.1:${port}`, HERMES_CONTROL_URL: mockHermesUrl, HERMES_CONTROL_TOKEN: dashboardSessionToken, HERMES_SERVE_WS_URL: `ws://127.0.0.1:${serveAddress.port}`, COMPANION_DATA_DIR: stateDir } });
