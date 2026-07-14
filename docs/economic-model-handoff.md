@@ -24,10 +24,10 @@ With an authorized Hermes Serve URL, Companion calls:
 session.context_breakdown { session_id }
 ```
 
-The only application path is the typed SvelteKit query
-`getSessionContextUsage` in
-`apps/desktop/src/lib/client/remote/sessions.remote.ts`. It validates
-returned data with shared `ContextUsage` schema before it reaches the UI.
+The only application path is the upstream-aligned controller method in
+`packages/hermes-adapter/src/session-controller.ts`, projected by the thin
+Svelte adapter in `apps/desktop/src/lib/client/hermes-chat.svelte.ts`. The
+Svelte boundary validates returned data with the shared `ContextUsage` schema.
 
 | Hermes field | Rendered meaning |
 | --- | --- |

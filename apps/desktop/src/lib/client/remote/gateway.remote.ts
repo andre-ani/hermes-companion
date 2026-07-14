@@ -7,7 +7,7 @@ import { setExecutionHostConnection } from '$lib/server/execution-host';
 import { invokeNative } from '$lib/server/native-client';
 import { discoverLocalHermesServices as discoverLocalHermesServicesOnHost } from '$lib/server/local-hermes-discovery';
 import { resolveServedLocalDashboardToken } from '$lib/server/local-dashboard-token';
-import { configureHermesServeAuth } from '$lib/server/hermes-serve-auth';
+import { configureHermesServeAuth, resolveHermesServeWebSocketUrl } from '$lib/server/hermes-serve-auth';
 import { connectHermes } from '$lib/server/gateway-connection';
 import { getHermesProjectTree, listHermesProjects } from '$lib/server/hermes-projects';
 
@@ -139,6 +139,29 @@ export const selectHermesProfile = command(z.object({ id: z.string().min(1) }), 
   if (!(payload.profiles ?? []).some((value) => asRecord(value).name === id)) throw new Error('Hermes profile was not found.');
   await repository.upsertConnection({ ...connection, hermesProfileId: id });
   return { id };
+});
+
+// The renderer is allowed to receive only a freshly minted, single-use
+// WebSocket URL. Durable Railway credentials and the authenticated cookie jar
+// remain in native/server custody and are never serialized into renderer
+// state. A new call is required for every physical socket.
+export const mintHermesServeSocketUrl = command(z.object({
+  connectionId: z.string().min(1),
+  profileId: z.string().min(1)
+}), async ({ connectionId, profileId }) => {
+  const connection = await getCompanionRepository().getActiveConnection();
+  if (!connection || connection.id !== connectionId) throw new Error('The active Hermes connection changed.');
+  if (connection.hermesProfileId && connection.hermesProfileId !== profileId) {
+    throw new Error('The active Hermes profile changed.');
+  }
+  await restoreServeAuth(connection);
+  const value = await resolveHermesServeWebSocketUrl(connection);
+  if (!value) throw new Error('This Hermes connection does not provide an authorized WebSocket endpoint.');
+  const url = new URL(value);
+  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  if (connection.kind === 'remote' && url.protocol !== 'wss:') throw new Error('Remote Hermes WebSocket tickets must use TLS.');
+  if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && loopback)) throw new Error('Hermes returned an unsafe WebSocket endpoint.');
+  return { url: url.toString() };
 });
 
 export const selectGatewayConnection = command(z.object({ id: z.string().min(1) }), async ({ id }) => {

@@ -77,6 +77,7 @@ export interface HermesSessionController {
   submit(input: SubmitPromptInput): Promise<void>;
   interrupt(): Promise<void>;
   respondApproval(choice: ApprovalChoice): Promise<void>;
+  getContextBreakdown(): Promise<Readonly<Record<string, unknown>>>;
   reconnect(): Promise<void>;
   subscribe(listener: (snapshot: HermesSessionSnapshot) => void): () => void;
   dispose(): void;
@@ -122,7 +123,8 @@ const inflight = (payload: HermesSessionResumePayload) => {
 };
 const isRunning = (payload: HermesSessionResumePayload) => {
   const active = inflight(payload);
-  return payload.running === true || payload.status === 'running' || payload.status === 'streaming' || active.streaming;
+  const info = record(payload.info);
+  return payload.running === true || info.running === true || payload.status === 'running' || payload.status === 'streaming' || active.streaming;
 };
 const lastAssistantAfter = (items: readonly unknown[], baseline: number) => {
   for (let index = items.length - 1; index >= baseline; index -= 1) {
@@ -223,7 +225,11 @@ export class UpstreamHermesSessionController implements HermesSessionController 
     this.reconnectPromise = (async () => {
       let lastError: unknown;
       const reconnecting = Boolean(this.snapshotValue.durableSessionId);
-      for (const waitMs of this.options.reconnectDelaysMs ?? [0, 1_000, 2_000, 4_000, 8_000, 15_000]) {
+      const schedule = this.options.reconnectDelaysMs ?? [0, 1_000, 2_000, 4_000, 8_000, 15_000];
+      let attempt = 0;
+      while (!this.disposed && (attempt < schedule.length || Boolean(this.snapshotValue.durableSessionId))) {
+        const waitMs = schedule[Math.min(attempt, schedule.length - 1)] ?? 0;
+        attempt += 1;
         if (this.disposed) return;
         if (waitMs) await delay(waitMs);
         try {
@@ -286,20 +292,23 @@ export class UpstreamHermesSessionController implements HermesSessionController 
     const history = messages(payload);
     const active = inflight(payload);
     const running = isRunning(payload);
+    const lostApproval = recovering && this.snapshotValue.approval !== null;
     const recovered = running ? null : lastAssistantAfter(history, this.baselineMessageCount);
     const wasActive = ['running', 'awaiting-input'].includes(this.snapshotValue.status) || recovering;
     this.publish({
       durableSessionId: persisted,
       history,
       sessionInfo: record(payload.info),
-      status: running ? 'running' : wasActive && recovered ? 'completed' : 'ready',
+      status: lostApproval ? 'awaiting-input' : running ? 'running' : wasActive && recovered ? 'completed' : 'ready',
       assistant: running
         ? { ...this.snapshotValue.assistant, text: active.assistant || this.snapshotValue.assistant.text }
         : recovered
           ? { ...this.snapshotValue.assistant, ...recovered, thinkingStatus: null }
           : this.snapshotValue.assistant,
       approval: null,
-      error: null
+      error: lostApproval
+        ? 'Hermes is still running, but the pinned runtime cannot replay the pending approval after reconnect. Stop the response or wait for Hermes to resolve it.'
+        : null
     });
   }
 
@@ -330,21 +339,18 @@ export class UpstreamHermesSessionController implements HermesSessionController 
       approval: null,
       error: null
     });
-    try {
-      await client.request('prompt.submit', {
+    void client.request('prompt.submit', {
         session_id: sessionId,
         text: submittedText,
         ...(input.truncateBeforeUserOrdinal !== undefined ? { truncate_before_user_ordinal: input.truncateBeforeUserOrdinal } : {})
-      }, 1_800_000);
-    } catch (error) {
+      }, 1_800_000).catch((error) => {
       if (client.connectionState !== 'open') {
         void this.startReconnect();
         return;
       }
       const message = error instanceof Error ? error.message : 'Hermes rejected the prompt.';
       this.publish({ status: 'failed', error: message });
-      throw error;
-    }
+    });
   }
 
   async interrupt() {
@@ -362,6 +368,13 @@ export class UpstreamHermesSessionController implements HermesSessionController 
     const result = await client.request<{ resolved?: unknown }>('approval.respond', { session_id: sessionId, choice }, 15_000);
     if (result.resolved === 0) throw new Error('This Hermes approval is no longer pending.');
     this.publish({ status: 'running', approval: null });
+  }
+
+  async getContextBreakdown() {
+    const client = await this.ensureOpen();
+    const sessionId = this.currentTransportId;
+    if (!sessionId) throw new Error('Resume or create a Hermes session before loading context usage.');
+    return client.request<Record<string, unknown>>('session.context_breakdown', { session_id: sessionId }, 15_000);
   }
 
   private handleEvent(event: GatewayEvent) {
@@ -394,6 +407,9 @@ export class UpstreamHermesSessionController implements HermesSessionController 
       });
     } else if (event.type === 'session.info') {
       this.publish({ sessionInfo: { ...this.snapshotValue.sessionInfo, ...payload } });
+      if (payload.running === false && ['running', 'awaiting-input'].includes(this.snapshotValue.status) && this.snapshotValue.durableSessionId) {
+        void this.resume(this.snapshotValue.durableSessionId);
+      }
     } else if (event.type === 'message.complete') {
       const status = text(payload.status);
       const completedText = this.snapshotValue.assistant.text || text(payload.text);

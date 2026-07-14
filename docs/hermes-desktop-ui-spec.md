@@ -38,10 +38,10 @@ Hermes files were inspected for this handoff:
 | `tools/mcp_tool.py`, `tui_gateway/entry.py`, `website/docs/user-guide/features/mcp.md` | Hermes discovers authenticated remote HTTP/Streamable HTTP MCP tools, enabling a separate Bridge without a fork. |
 | `tui_gateway/server.py` dispatch for `session.context_breakdown` | Context usage is Hermes-owned session data, never a Companion estimate. |
 
-Companion's typed implementation is
-`apps/desktop/src/lib/client/remote/sessions.remote.ts`:
-`getSessionContextUsage`. It sends `session.context_breakdown { session_id }`
-only through an authorized Hermes Serve URL and validates the returned payload.
+Companion's typed implementation is the upstream-aligned controller in
+`packages/hermes-adapter/src/session-controller.ts`, with schema validation in
+`apps/desktop/src/lib/client/hermes-chat.svelte.ts`. It sends
+`session.context_breakdown { session_id }` on the active session transport.
 
 ## Locked product model
 

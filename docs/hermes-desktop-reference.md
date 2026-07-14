@@ -148,9 +148,9 @@ a user prompt is conversation rewind: Desktop resubmits `prompt.submit` with
 prompt. Context-compression checkpoint summaries are continuity data and are
 not rollback controls.
 
-Companion now implements prompt restore through its existing streamed
-`sendChatMessage` capability, with confirmation, optimistic truncation rollback
-on failure, and a `hermes.session.checkpoint.restored` audit record. Electron
+Companion now implements prompt restore through the upstream-aligned session
+controller using `prompt.submit` with `truncate_before_user_ordinal`; the
+renderer owns only confirmation and transient presentation. Earlier Electron
 UAT first opened and cancelled the confirmation; the refined capture is
 `/tmp/hermes-companion-restore-checkpoint-refined.png`. A later live destructive
 pass rewound a test marker, removed the later turn, reduced the visible restore

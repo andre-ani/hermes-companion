@@ -59,9 +59,9 @@ describe('upstream Hermes session controller', () => {
           socket.send(JSON.stringify({
             jsonrpc: '2.0', id: request.id,
             result: {
-              session_id: 'transport-2', stored_session_id: 'durable-1', running: false,
+              session_id: 'transport-2', stored_session_id: 'durable-1',
               messages: [{ role: 'user', text: 'Do the work' }, { role: 'assistant', text: 'Recovered once' }],
-              info: { model: 'hermes-test' }
+              info: { model: 'hermes-test', running: false }
             }
           }));
         }
@@ -84,7 +84,7 @@ describe('upstream Hermes session controller', () => {
 
     expect(snapshot.durableSessionId).toBe('durable-1');
     expect(snapshot.assistant.text).toBe('Recovered once');
-    expect(snapshot.sessionInfo).toEqual({ model: 'hermes-test' });
+    expect(snapshot.sessionInfo).toEqual({ model: 'hermes-test', running: false });
     expect(tickets).toBe(2);
     expect(prompts).toBe(1);
     expect(methods).toEqual(['1:session.create', '1:prompt.submit', '2:session.resume']);
@@ -98,7 +98,7 @@ describe('upstream Hermes session controller', () => {
         const request = JSON.parse(raw.toString()) as { id: string; method: string; params: Record<string, unknown> };
         received.push({ method: request.method, params: request.params });
         if (request.method === 'session.resume') {
-          socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: 'runtime-current', stored_session_id: 'durable-current', running: true, inflight: { streaming: true } } }));
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: 'runtime-current', resumed: 'durable-current', info: { running: true }, inflight: { streaming: true } } }));
           setTimeout(() => socket.send(JSON.stringify({
             jsonrpc: '2.0', method: 'event',
             params: { type: 'approval.request', session_id: 'runtime-current', payload: { description: 'Run command', allow_permanent: false } }

@@ -20,6 +20,12 @@
       "divergence": "Framework-neutral controller with injected socket ticket provider; no React lifecycle or store topology."
     },
     {
+      "mode": "behavioral-port",
+      "upstream": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts;apps/desktop/src/app/session/hooks/use-message-stream/gateway-event.ts;apps/desktop/src/lib/chat-messages.ts",
+      "local": "apps/desktop/src/lib/client/hermes-chat.svelte.ts",
+      "divergence": "Thin Svelte store projection and desktop message formatting over the framework-neutral controller; no React hooks, effects, contexts, or nanostores."
+    },
+    {
       "mode": "compatibility-shim",
       "upstream": "tui_gateway/server.py",
       "local": "packages/hermes-adapter/src/session-controller.ts",
