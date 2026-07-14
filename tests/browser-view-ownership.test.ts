@@ -102,7 +102,9 @@ describe('native BrowserView ownership', () => {
 
     expect.soft(/if\s*\(\s*active\s*&&\s*!browserSurfaceActive\s*\)\s*browserLeaseId\s*=\s*crypto\.randomUUID\(\)/.test(synchronize), 'an inactive-to-active transition must mint a new native lease').toBe(true);
     expect.soft(/browserSurfaceActive\s*=\s*active/.test(synchronize), 'activation state must be recorded so stable rerenders do not churn the lease').toBe(true);
-    expect.soft(/workspaceLayoutInteractive\s*&&\s*inspectorVisible\s*&&\s*dockTab\s*===\s*['"]browser['"]/.test(page), 'activation must include remount readiness, inspector visibility, and the selected Browser tab').toBe(true);
+    expect.soft(/inspectorVisible\s*&&\s*dockTab\s*===\s*['"]browser['"]/.test(page), 'activation must follow actual inspector visibility and the selected Browser tab, not async layout readiness').toBe(true);
+    expect.soft(/function\s+browserOwnerKeyFor\s*\(owner:\s*WorkspaceLayoutOwner\s*\|\s*null\)/.test(page), 'browser ownership must be derived from the logical workspace resource').toBe(true);
+    expect.soft(/<WorkspaceDock[\s\S]*\{browserOwnerKey\}/.test(page), 'the dock must remain mounted while layout hydration reconciles').toBe(true);
     expect.soft(/const\s+ownerKey\s*=\s*browserOwnerKey[\s\S]{0,120}const\s+leaseId\s*=\s*browserLeaseId[\s\S]{0,220}releaseBrowserLease\(ownerKey,\s*leaseId\)/.test(dock), 'dock cleanup must release the identity captured by the outgoing activation').toBe(true);
     expect.soft(/if\s*\(\s*!sameBrowserIdentity\(ownerKey,\s*browserLeaseId\)\s*\)\s*return\s*\{\s*ok:\s*false\s*\}/.test(release), 'a delayed release must be rejected before native view destruction').toBe(true);
   });

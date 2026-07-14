@@ -201,6 +201,15 @@
     return null;
   });
   const inspectorOwnerKey = $derived(workspaceLayoutIdentity ? workspaceLayoutOwnerKey(workspaceLayoutIdentity) : 'workspace:none');
+  // Browser tabs belong to the logical profile/resource, not to a transient
+  // gateway connection. Connection recovery must not tear down a native view
+  // that is still owned by the same visible session.
+  function browserOwnerKeyFor(owner: WorkspaceLayoutOwner | null) {
+    return owner
+      ? `workspace-browser:${owner.profileId}:${owner.resource.kind}:${owner.resource.id}`
+      : 'workspace-browser:none';
+  }
+  const browserOwnerKey = $derived(browserOwnerKeyFor(workspaceLayoutIdentity));
   const workspaceLayoutInteractive = $derived(Boolean(workspaceLayoutIdentity && workspaceLayoutHydratedKey === inspectorOwnerKey && !workspaceLayoutApplying));
 
   function synchronizeBrowserSurfaceLease(active: boolean) {
@@ -212,7 +221,9 @@
   }
 
   $effect(() => {
-    synchronizeBrowserSurfaceLease(Boolean(workspaceLayoutInteractive && inspectorVisible && dockTab === 'browser'));
+    // Layout hydration is not browser visibility. Keep the activation lease
+    // stable while the shell reconciles geometry or a gateway reconnects.
+    synchronizeBrowserSurfaceLease(Boolean(inspectorVisible && dockTab === 'browser'));
   });
   const activeWorkspaceBranch = $derived(activeWorktree
     ? { id: activeWorktree.worktreeId, branch: activeWorktree.branch }
@@ -435,20 +446,20 @@
     return owner ? workspaceLayoutOwnerKey(owner) : null;
   }
 
-  function prepareWorkspaceLayoutOwnerTransition(outgoingOwner: WorkspaceLayoutOwner | null) {
+  function prepareWorkspaceLayoutOwnerTransition(outgoingOwner: WorkspaceLayoutOwner | null, nextOwner: WorkspaceLayoutOwner | null) {
     if (outgoingOwner && workspaceLayoutHydratedKey === workspaceLayoutOwnerKey(outgoingOwner)) {
       queueWorkspaceLayoutPersistence(outgoingOwner, snapshotWorkspaceLayout());
     }
     const outgoingOwnerKey = workspaceLayoutOwnerKeyOrNull(outgoingOwner) ?? 'workspace:none';
     const outgoingLeaseId = browserLeaseId;
     if (fullscreenPreview) {
-      void resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: outgoingOwnerKey, browserLeaseId: outgoingLeaseId })).catch(() => undefined);
+      void resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: browserOwnerKeyFor(outgoingOwner), browserLeaseId: outgoingLeaseId })).catch(() => undefined);
     }
     fullscreenPreview = false;
     workspaceLayoutReady = false;
     workspaceLayoutApplying = true;
     workspaceLayoutHydratedKey = '';
-    browserLeaseId = crypto.randomUUID();
+    if (browserOwnerKeyFor(outgoingOwner) !== browserOwnerKeyFor(nextOwner)) browserLeaseId = crypto.randomUUID();
     applyWorkspaceLayout(WorkspaceLayoutPreferences.parse({}));
   }
 
@@ -588,7 +599,7 @@
     const previousLayoutOwner = layoutOwnerForView(visibleViewOwner);
     const nextLayoutOwner = layoutOwnerForIdentity({ connectionId, profileId, sessionId, draftId });
     if (workspaceLayoutOwnerKeyOrNull(previousLayoutOwner) !== workspaceLayoutOwnerKeyOrNull(nextLayoutOwner)) {
-      prepareWorkspaceLayoutOwnerTransition(previousLayoutOwner);
+      prepareWorkspaceLayoutOwnerTransition(previousLayoutOwner, nextLayoutOwner);
     }
     const owner = viewOwnership.begin({ connectionId, profileId, sessionId, draftId, location });
     visibleViewOwner = owner;
@@ -1349,7 +1360,7 @@
   }
 
   async function exitFullscreenPreview() {
-    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: inspectorOwnerKey, browserLeaseId })); }
+    try { await resolveRemoteResult(setBrowserFullscreen({ fullscreen: false, ownerKey: browserOwnerKey, browserLeaseId })); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Could not leave full-screen preview.'; }
     finally { fullscreenPreview = false; }
   }
@@ -1749,7 +1760,7 @@
           {/if}
         </section>
       <div class="pane-resizer inspector-resizer" role="separator" aria-label="Resize right panel" aria-orientation="vertical" onpointerdown={(event) => startPanelResize(event, 'inspector')}></div>
-      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}>{#if workspaceLayoutInteractive}<WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} unavailableReason={workspaceUnavailableReason} browserOwnerKey={inspectorOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value, identity) => { if (identity.ownerKey === inspectorOwnerKey && identity.browserLeaseId === browserLeaseId) fullscreenPreview = value; }} />{/if}</aside>
+      <aside id="workspace-inspector" class="inspector-pane" aria-hidden={!inspectorVisible} inert={!inspectorVisible}><WorkspaceDock worktree={activeWorktree} gitWorkspace={activeGitWorkspace} unavailableReason={workspaceUnavailableReason} {browserOwnerKey} {browserLeaseId} visible={inspectorVisible} bind:dockTab bind:openTabs={dockTabs} onchanged={() => { void loadWorkspace(); }} onfullscreenchange={(value, identity) => { if (identity.ownerKey === browserOwnerKey && identity.browserLeaseId === browserLeaseId) fullscreenPreview = value; }} /></aside>
     </div>
   </main>
   {#if fullscreenPreview}<div class="floating-composer-shell">
