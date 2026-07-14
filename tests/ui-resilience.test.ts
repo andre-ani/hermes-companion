@@ -67,6 +67,19 @@ describe('shell resilience', () => {
     expect(sidebarCategory).not.toContain('data-expanded={expanded}');
   });
 
+  it('releases dialog hit targets as soon as the shared primitive closes', async () => {
+    const [content, overlay] = await Promise.all([
+      source('lib/components/ui/dialog/dialog-content.svelte'),
+      source('lib/components/ui/dialog/dialog-overlay.svelte')
+    ]);
+    for (const primitive of [content, overlay]) {
+      expect(primitive).toContain('data-[state=closed]:hidden');
+      expect(primitive).not.toContain('data-[state=closed]:animate-out');
+      expect(primitive).not.toContain('data-closed:animate-out');
+    }
+    expect(content).toContain('{#snippet child({ props })}');
+  });
+
   it('keeps both pane restoration controls in viewport chrome', async () => {
     const page = await source('routes/+page.svelte');
     expect(page).toContain('aria-controls="session-sidebar"');
