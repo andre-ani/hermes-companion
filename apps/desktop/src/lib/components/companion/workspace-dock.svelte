@@ -67,6 +67,7 @@
   let browserHostObserver: ResizeObserver | null = null;
   let browserGeometryFrame: number | null = null;
   let lastBrowserBounds = '';
+  let browserOperationGeneration = 0;
 
   $effect(() => {
     const id = worktree?.worktreeId ?? null;
@@ -294,9 +295,16 @@
   async function openWeb() {
     previewPending = true; error = '';
     const identity = browserIdentity();
-    try { await resolveRemoteResult(claimBrowser(identity)); const next = await resolveRemoteResult(openGeneralBrowser({ url: browserUrl, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; browserState = next; await tick(); startBrowserGeometrySync(); }
-    catch (cause) { error = cause instanceof Error ? cause.message : 'Browser page could not open.'; }
-    finally { previewPending = false; }
+    const operation = ++browserOperationGeneration;
+    const current = () => operation === browserOperationGeneration && isCurrentBrowserIdentity(identity);
+    try { await resolveRemoteResult(claimBrowser(identity)); const next = await resolveRemoteResult(openGeneralBrowser({ url: browserUrl, ...identity })); if (!current()) return; browserState = next; await tick(); startBrowserGeometrySync(); }
+    catch (cause) {
+      // Native loading owns the view lifecycle. If it tears a failed view down,
+      // converge the dock to that closed state so no stale host or RAF loop can
+      // keep sending geometry for a view that no longer exists.
+      if (current()) { stopBrowserGeometrySync(); browserState = closedBrowserState(); error = cause instanceof Error ? cause.message : 'Browser page could not open.'; }
+    }
+    finally { if (current()) previewPending = false; }
   }
 
   async function loadLocalServers() {
@@ -313,12 +321,13 @@
 
   async function browserAction(action: 'back' | 'forward' | 'reload' | 'close') {
     const identity = browserIdentity();
-    try { if (action === 'close') stopBrowserGeometrySync(); const result = await resolveRemoteResult(controlBrowser({ action, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; if ('open' in result) browserState = result; else if (action === 'close') browserState = closedBrowserState(); }
+    try { if (action === 'close') { ++browserOperationGeneration; stopBrowserGeometrySync(); } const result = await resolveRemoteResult(controlBrowser({ action, ...identity })); if (!isCurrentBrowserIdentity(identity)) return; if ('open' in result) browserState = result; else if (action === 'close') browserState = closedBrowserState(); }
     catch (cause) { error = cause instanceof Error ? cause.message : 'Browser action failed.'; }
   }
 
   async function releaseBrowserLease(ownerKey = browserOwnerKey, leaseId = browserLeaseId) {
     if (typeof window === 'undefined') return;
+    if (ownerKey === browserOwnerKey && leaseId === browserLeaseId) { ++browserOperationGeneration; previewPending = false; }
     stopBrowserGeometrySync();
     await resolveRemoteResult(releaseBrowser({ ownerKey, browserLeaseId: leaseId })).catch(() => undefined);
     if (ownerKey === browserOwnerKey && leaseId === browserLeaseId) browserState = closedBrowserState();
@@ -341,7 +350,7 @@
     const isBrowserVisible = visible && dockTab === 'browser';
     const identity = browserIdentity();
     untrack(() => {
-      if (isBrowserVisible) { void resolveRemoteResult(claimBrowser(identity)).catch(() => undefined); return; }
+      if (isBrowserVisible) { void loadBrowserStatus(); return; }
       void releaseBrowserLease(identity.ownerKey, identity.browserLeaseId);
     });
   });

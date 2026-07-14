@@ -183,6 +183,17 @@ describe('native BrowserView ownership', () => {
     expect.soft(/did-start-loading/.test(electron), 'renderer loading must release native browser ownership').toBe(true);
   });
 
+  it('converges the dock after native browser teardown or a failed open', async () => {
+    const dock = await source('lib/components/companion/workspace-dock.svelte');
+    const openWeb = functionSource(dock, 'openWeb');
+    const visibilityEffects = reactiveEffects(dock).filter((effect) => /isBrowserVisible/.test(effect));
+
+    expect.soft(/stopBrowserGeometrySync\(\)/.test(openWeb), 'failed native opens must stop the renderer geometry loop').toBe(true);
+    expect.soft(/browserState\s*=\s*closedBrowserState\(\)/.test(openWeb), 'failed native opens must close the renderer browser state').toBe(true);
+    expect.soft(/browserOperationGeneration/.test(openWeb) && /current\(\)/.test(openWeb), 'stale open completions must not mutate a newer browser activation').toBe(true);
+    expect.soft(visibilityEffects.some((effect) => /loadBrowserStatus\(\)/.test(effect)), 'new leases must reconcile against native status instead of only claiming').toBe(true);
+  });
+
   it('does not keep an unowned raw BrowserView or layout alive at app scope', async () => {
     const main = await readFile(new URL('main.cjs', electronSource), 'utf8');
 
