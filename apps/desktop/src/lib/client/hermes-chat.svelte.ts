@@ -253,7 +253,6 @@ export class HermesChatSession implements Readable<HermesChatView> {
         }))
       })
     };
-    if (this.latestSnapshot) this.project(this.latestSnapshot);
     await this.controller.submit({
       text: input.text,
       attachments: input.attachments,

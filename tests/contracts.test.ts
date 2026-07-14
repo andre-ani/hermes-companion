@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AnnotationPayload, BridgeEnvelope, DesktopPreferences, HERMES_API_CAPABILITY_CONTRACT_V1, HermesActionStatus, HermesApiCapabilitiesDescriptor, RecoverableChatTurn, StartRunInput, SupportedHermesApiCapabilityContract } from '@hermes-companion/contracts';
+import { AnnotationPayload, BridgeEnvelope, DesktopPreferences, HERMES_API_CAPABILITY_CONTRACT_V1, HermesActionStatus, HermesApiCapabilitiesDescriptor, StartRunInput, SupportedHermesApiCapabilityContract } from '@hermes-companion/contracts';
 
 describe('companion contracts', () => {
   it('does not expose a fixture mode in desktop preferences', () => {
@@ -9,18 +9,6 @@ describe('companion contracts', () => {
 
   it('requires a scoped worktree for every Hermes background run', () => {
     expect(() => StartRunInput.parse({ harness: 'hermes', prompt: 'Ship it' })).toThrow();
-  });
-
-  it('requires recoverable turns to pair a user message with the same session snapshot', () => {
-    const requestId = crypto.randomUUID();
-    const userMessage = { id: 'user-1', sessionId: 'session-1', role: 'user', text: 'Keep working', createdAt: new Date().toISOString() };
-    const snapshot = {
-      requestId, sequence: 1, sessionId: 'session-1', status: 'streaming',
-      message: { id: 'assistant-1', sessionId: 'session-1', role: 'assistant', text: 'Working', createdAt: new Date().toISOString(), generation: { requestId, sequence: 1, status: 'streaming' } }
-    };
-    expect(RecoverableChatTurn.parse({ userMessage, snapshot, baselineMessageCount: 0 }).userMessage.role).toBe('user');
-    expect(() => RecoverableChatTurn.parse({ userMessage: { ...userMessage, role: 'assistant' }, snapshot, baselineMessageCount: 0 })).toThrow('must include its user message');
-    expect(() => RecoverableChatTurn.parse({ userMessage: { ...userMessage, sessionId: 'other-session' }, snapshot, baselineMessageCount: 0 })).toThrow('same session');
   });
 
   it('pins verified Hermes capability discovery to an explicit supported contract', () => {

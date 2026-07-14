@@ -16,3 +16,4 @@ dist
 docs/current-checkpoint.md
 apps/desktop/electron-dist
 apps/desktop/uat-artifacts
+acceptance-artifacts

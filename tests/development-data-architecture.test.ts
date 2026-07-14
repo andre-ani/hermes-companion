@@ -8,9 +8,11 @@ describe('development data architecture', () => {
   it('keeps workspace data limited to live Hermes state', async () => {
     const gateway = await source('lib/client/remote/gateway.remote.ts');
     const sessions = await source('lib/client/remote/sessions.remote.ts');
+    const chat = await source('lib/client/hermes-chat.svelte.ts');
     expect(gateway).toContain('const sessions = liveSessions.map');
     expect(gateway).not.toContain('directProviderSessions');
-    expect(sessions).toContain('startHermesChatTurn');
+    expect(chat).toContain('UpstreamHermesSessionController');
+    expect(sessions).not.toContain('startHermesChatTurn');
     expect(sessions).not.toContain('startDirectChatTurn');
     expect(gateway).not.toContain('showcase');
     expect(sessions).not.toContain('showcase');

@@ -47,3 +47,6 @@ old path do not satisfy this gate.
 Stop this slice when focused/full checks and the packaged live workflow pass,
 the old chat path is deleted, and a clean rollback commit exists. Then review
 the result before migrating Code mode or workspace ownership.
+
+The packaged operator workflow is `npm run acceptance:live-railway-chat`; its
+sanitized report is intentionally ignored under `acceptance-artifacts/`.

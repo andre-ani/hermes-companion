@@ -242,8 +242,10 @@ export class UpstreamHermesSessionController implements HermesSessionController 
               profile: this.options.profileId
             });
             this.applyResume(resumed, this.snapshotValue.durableSessionId, true);
+            this.publish({ connectionState: 'open' });
+          } else {
+            this.publish({ connectionState: 'open', error: null });
           }
-          this.publish({ connectionState: 'open', error: null });
           return;
         } catch (error) {
           lastError = error;

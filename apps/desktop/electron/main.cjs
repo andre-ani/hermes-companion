@@ -593,6 +593,10 @@ async function runAutomatedUat(window) {
     }
     const chatEvidence = await window.webContents.executeJavaScript(`document.querySelector('.conversation-root')?.innerText ?? document.querySelector('main')?.innerText ?? ''`);
     checks.chatMutation = submittedChat && /Confirm the preview relay boundary\./.test(chatEvidence) && /Confirmed: this session remains bound to its isolated preview relay and worktree\./.test(chatEvidence);
+    if (!checks.chatMutation) {
+      const chatFailure = await window.webContents.executeJavaScript(`(() => ({ body: document.body.innerText.slice(0, 3000), alert: document.querySelector('[role="alert"]')?.textContent?.trim() ?? null }))()`);
+      throw new Error(`Upstream-backed chat acceptance failed: ${JSON.stringify(chatFailure)}`);
+    }
     const openedContext = await window.webContents.executeJavaScript(`(() => { const button = document.querySelector('button[title="Show Hermes context usage"]'); button?.click(); return Boolean(button); })()`);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const ready = await window.webContents.executeJavaScript(`document.querySelector('[data-slot="popover-content"][aria-label="Hermes context usage"]')?.innerText?.includes('Tool output')`);

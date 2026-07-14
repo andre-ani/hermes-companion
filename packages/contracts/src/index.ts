@@ -549,66 +549,12 @@ export const ChatTurnApproval = z.object({
 });
 export type ChatTurnApproval = z.infer<typeof ChatTurnApproval>;
 
-export const ChatTurnSnapshot = z.object({
-  requestId: z.string().uuid(),
-  sequence: z.number().int().nonnegative(),
-  sessionId: z.string().min(1),
-  status: MessageGeneration.shape.status,
-  message: HermesMessage,
-  approval: ChatTurnApproval.nullable().default(null),
-  error: z.string().min(1).nullable().default(null)
-});
-export type ChatTurnSnapshot = z.infer<typeof ChatTurnSnapshot>;
-
-export const RecoverableChatTurn = z.object({
-  userMessage: HermesMessage,
-  snapshot: ChatTurnSnapshot,
-  baselineMessageCount: z.number().int().nonnegative()
-}).superRefine(({ userMessage, snapshot }, context) => {
-  if (userMessage.role !== 'user') context.addIssue({ code: 'custom', message: 'A recoverable turn must include its user message.', path: ['userMessage', 'role'] });
-  if (userMessage.sessionId !== snapshot.sessionId) context.addIssue({ code: 'custom', message: 'Recoverable turn messages must belong to the same session.', path: ['userMessage', 'sessionId'] });
-  if (userMessage.generation !== null) context.addIssue({ code: 'custom', message: 'The recovered user message cannot own assistant generation state.', path: ['userMessage', 'generation'] });
-});
-export type RecoverableChatTurn = z.infer<typeof RecoverableChatTurn>;
-
 export const ChatAttachmentInput = z.object({
   filename: z.string().trim().min(1).max(255),
   mediaType: z.string().trim().min(1).max(160),
   dataUrl: z.string().startsWith('data:').max(35_000_000)
 });
 export type ChatAttachmentInput = z.infer<typeof ChatAttachmentInput>;
-
-export const ChatTurnControl = z.discriminatedUnion('operation', [
-  z.object({
-    operation: z.literal('send'),
-    requestId: z.string().uuid(),
-    sessionId: z.string().min(1).optional(),
-    message: z.string().trim().max(100_000),
-    attachments: z.array(ChatAttachmentInput).max(8).default([]),
-    model: z.string().trim().min(1).max(300).optional(),
-    modelProvider: z.string().trim().min(1).max(120).optional(),
-    modelSource: ModelSource.optional(),
-    profileId: z.string().trim().min(1).max(240).optional(),
-    cwd: z.string().trim().min(1).max(4_096).optional(),
-    truncateBeforeUserOrdinal: z.number().int().nonnegative().optional(),
-    interruptFirst: z.boolean().default(false)
-  }),
-  z.object({
-    operation: z.literal('next'),
-    requestId: z.string().uuid(),
-    afterSequence: z.number().int().nonnegative().default(0)
-  }),
-  z.object({
-    operation: z.literal('cancel'),
-    requestId: z.string().uuid()
-  }),
-  z.object({
-    operation: z.literal('approve'),
-    requestId: z.string().uuid(),
-    choice: z.enum(['once', 'session', 'always', 'deny'])
-  })
-]);
-export type ChatTurnControl = z.infer<typeof ChatTurnControl>;
 
 export const ContextUsageCategory = z.object({
   id: z.string().min(1),

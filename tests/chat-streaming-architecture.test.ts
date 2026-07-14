@@ -1,45 +1,37 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 const desktop = new URL('../apps/desktop/src/', import.meta.url);
 const source = (path: string) => readFile(new URL(path, desktop), 'utf8');
 
 describe('Hermes chat streaming architecture', () => {
-  it('uses one Hermes-owned turn controller with cumulative progress and explicit cancellation', async () => {
-    const [remote, runs, page] = await Promise.all([
+  it('routes chat through the upstream-backed adapter without the old polling control plane', async () => {
+    const [remote, adapter, page] = await Promise.all([
       source('lib/client/remote/sessions.remote.ts'),
-      source('lib/server/hermes-chat-runs.ts'),
+      source('lib/client/hermes-chat.svelte.ts'),
       source('routes/+page.svelte')
     ]);
-    expect(remote).toContain('command(ChatTurnControl');
-    expect(remote).toContain("input.operation === 'next'");
-    expect(remote).toContain("input.operation === 'cancel'");
-    expect(remote).toContain("input.operation === 'approve'");
-    expect(remote).not.toContain('generateText');
-    expect(runs).toContain('HermesRpcSocket');
-    expect(runs).toContain("socket.request('prompt.submit'");
-    expect(runs).toContain("socket.request('session.interrupt'");
-    expect(runs).toContain('cancellationRequested');
-    expect(runs).toContain("event.type === 'tool.start'");
-    expect(runs).toContain("event.type === 'tool.complete'");
-    expect(runs).not.toContain('streamText');
-    expect(page).toContain("while (snapshot.status === 'streaming')");
-    expect(page).toContain("operation: 'cancel'");
-    expect(page).toContain("operation: 'approve'");
+    await expect(access(new URL('../apps/desktop/src/lib/server/hermes-chat-runs.ts', import.meta.url))).rejects.toThrow();
+    expect(remote).not.toContain('sendChatMessage');
+    expect(remote).not.toContain('recoverSessionTurn');
+    expect(adapter).toContain('UpstreamHermesSessionController');
+    expect(adapter).toContain('mintHermesServeSocketUrl');
+    expect(page).not.toContain("while (snapshot.status === 'streaming')");
+    expect(page).not.toContain('activeTurns');
+    expect(page).toContain('controller.interrupt()');
+    expect(page).toContain('controller.respondApproval(choice)');
     expect(page).toContain('Hermes approval required');
     expect(page).toContain('data-generation-status');
   });
 
-  it('restores prompt checkpoints through the same streamed Hermes turn path', async () => {
-    const [contracts, runs, remote, page] = await Promise.all([
+  it('restores prompt checkpoints through the same upstream controller', async () => {
+    const [contracts, controller, page] = await Promise.all([
       readFile(new URL('../packages/contracts/src/index.ts', import.meta.url), 'utf8'),
-      source('lib/server/hermes-chat-runs.ts'),
-      source('lib/client/remote/sessions.remote.ts'),
+      readFile(new URL('../packages/hermes-adapter/src/session-controller.ts', import.meta.url), 'utf8'),
       source('routes/+page.svelte')
     ]);
-    expect(contracts).toContain('truncateBeforeUserOrdinal');
-    expect(runs).toContain('truncate_before_user_ordinal');
-    expect(remote).toContain("'hermes.session.checkpoint.restored'");
+    expect(contracts).toContain('export const ChatAttachmentInput');
+    expect(controller).toContain('truncate_before_user_ordinal');
     expect(page).toContain('RestoreCheckpointDialog');
     expect(page).toContain('requestCheckpointRestore(messageIndex)');
     expect(page).toContain('await submit(target.text, target)');
@@ -57,28 +49,22 @@ describe('Hermes chat streaming architecture', () => {
     expect(page).not.toContain("import { createSession,");
     expect(page).toContain("activeComposerModel?.id === 'default' || activeComposerModel?.policyStatus === 'restricted' ? null");
     expect(page).toContain('model: activeComposerModelOverride?.id');
-    expect(page).toContain('modelProvider: activeComposerModelOverride?.runtimeProvider');
-    expect(await source('lib/server/hermes-chat-runs.ts')).toContain('transportSessionId');
-    expect(await source('lib/server/hermes-chat-runs.ts')).toContain('stored_session_id');
+    expect(page).toContain('provider: activeComposerModelOverride?.runtimeProvider');
   });
 
   it('stages composer attachments through the live Hermes session before prompt submission', async () => {
-    const [contracts, page, remote, runs] = await Promise.all([
+    const [contracts, page, controller] = await Promise.all([
       readFile(new URL('../packages/contracts/src/index.ts', import.meta.url), 'utf8'),
       source('routes/+page.svelte'),
-      source('lib/client/remote/sessions.remote.ts'),
-      source('lib/server/hermes-chat-runs.ts')
+      readFile(new URL('../packages/hermes-adapter/src/session-controller.ts', import.meta.url), 'utf8')
     ]);
     expect(contracts).toContain('export const ChatAttachmentInput');
-    expect(contracts).toContain('attachments: z.array(ChatAttachmentInput).max(8).default([])');
     expect(page).toContain('const attachments: ChatAttachmentInput[] = (detail.files ?? []).map');
-    expect(page).toContain('message: text, attachments');
-    expect(remote).toContain('attachments: input.attachments');
-    expect(runs).toContain("socket.request('image.attach_bytes'");
-    expect(runs).toContain("socket.request('pdf.attach'");
-    expect(runs).toContain("socket.request<{ ref_text?: string }>('file.attach'");
-    expect(runs.indexOf("socket.request<{ ref_text?: string }>('file.attach'")).toBeLessThan(runs.indexOf("socket.request('prompt.submit'"));
-    expect(runs).toContain("contextRefs.join('\\n')");
+    expect(page).toContain('await controller.submit({');
+    expect(controller).toContain("client.request('image.attach_bytes'");
+    expect(controller).toContain("client.request('pdf.attach'");
+    expect(controller).toContain("client.request<{ ref_text?: unknown }>('file.attach'");
+    expect(controller.indexOf("client.request<{ ref_text?: unknown }>('file.attach'")).toBeLessThan(controller.indexOf("client.request('prompt.submit'"));
     expect(page).not.toContain('voiceAvailable voiceActive');
     expect(page).not.toContain('toggleComposerVoice');
   });
@@ -96,17 +82,13 @@ describe('Hermes chat streaming architecture', () => {
   });
 
   it('creates project-scoped Hermes sessions in the selected Hermes workspace', async () => {
-    const [contracts, page, remote, runs] = await Promise.all([
-      readFile(new URL('../packages/contracts/src/index.ts', import.meta.url), 'utf8'),
+    const [page, controller] = await Promise.all([
       source('routes/+page.svelte'),
-      source('lib/client/remote/sessions.remote.ts'),
-      source('lib/server/hermes-chat-runs.ts')
+      readFile(new URL('../packages/hermes-adapter/src/session-controller.ts', import.meta.url), 'utf8')
     ]);
-    expect(contracts).toContain('cwd: z.string().trim().min(1).max(4_096).optional()');
-    expect(page).toContain('cwd: originalSessionId ? undefined : draftWorktree?.path ?? activeWorktree?.path ?? activeProject?.repositoryPath');
-    expect(remote).toContain('cwd: input.cwd');
-    expect(runs).toContain('...(input.cwd ? { cwd: input.cwd } : {})');
-    expect(runs).not.toContain('pendingWorktree');
+    expect(page).toContain('cwd: draftWorktree?.path ?? activeWorktree?.path ?? activeProject?.repositoryPath');
+    expect(controller).toContain('...(input.cwd ? { cwd: input.cwd } : {})');
+    expect(controller).not.toContain('pendingWorktree');
   });
 
   it('uses Hermes as the source of truth for connected project lists and creation', async () => {

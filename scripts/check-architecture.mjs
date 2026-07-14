@@ -58,6 +58,9 @@ for (const path of sourceFiles) {
     fail(`${local} imports prohibited React code.`);
   }
   if (path.endsWith('.tsx')) fail(`${local} is TSX product code; React ports are prohibited.`);
+  for (const match of source.matchAll(/['"]([^'"]*vendor\/hermes-agent\/[^'"]+)['"]/g)) {
+    if (!match[1].includes('vendor/hermes-agent/apps/shared/')) fail(`${local} reaches prohibited upstream product source ${match[1]}.`);
+  }
 }
 
 const rawRpc = /['"](?:session\.(?:create|resume|interrupt|info|context_breakdown)|prompt\.submit|approval\.respond)['"]/g;

@@ -130,4 +130,82 @@ describe('upstream Hermes session controller', () => {
     expect(received.find((item) => item.method === 'session.interrupt')?.params).toEqual({ session_id: 'runtime-current' });
     expect(snapshot.status).toBe('interrupted');
   });
+
+  it('rehydrates the same durable session after renderer controller recreation', async () => {
+    let tickets = 0;
+    let resumes = 0;
+    const origin = await listen((socket: WebSocket) => {
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: string; method: string; params: Record<string, unknown> };
+        if (request.method !== 'session.resume') return;
+        resumes += 1;
+        expect(request.params.session_id).toBe('durable-reload');
+        socket.send(JSON.stringify({
+          jsonrpc: '2.0', id: request.id,
+          result: {
+            session_id: `transport-${resumes}`,
+            resumed: 'durable-reload',
+            info: { model: 'hermes-reload', running: false },
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'Persist me' }] }, { role: 'assistant', content: 'Still here' }]
+          }
+        }));
+      });
+    });
+    const createController = () => {
+      const controller = new UpstreamHermesSessionController({
+        profileId: 'default',
+        socketProvider: { getFreshSocketUrl: async () => `${origin}?ticket=${++tickets}` },
+        socketFactory: (url) => new WebSocket(url) as never,
+        reconnectDelaysMs: [0]
+      });
+      controllers.push(controller);
+      return controller;
+    };
+    const first = createController();
+    await first.resume('durable-reload' as HermesDurableSessionId);
+    first.dispose();
+    const second = createController();
+    let snapshot!: HermesSessionSnapshot;
+    second.subscribe((value) => { snapshot = value; });
+    await second.resume('durable-reload' as HermesDurableSessionId);
+
+    expect(snapshot.durableSessionId).toBe('durable-reload');
+    expect(snapshot.history).toHaveLength(2);
+    expect(JSON.stringify(snapshot)).not.toContain('transport-2');
+    expect(tickets).toBe(2);
+    expect(resumes).toBe(2);
+  });
+
+  it('does not fabricate a lost approval when the pinned runtime cannot replay it', async () => {
+    let connections = 0;
+    const origin = await listen((socket: WebSocket) => {
+      connections += 1;
+      const connection = connections;
+      socket.on('message', (raw) => {
+        const request = JSON.parse(raw.toString()) as { id: string; method: string };
+        if (request.method !== 'session.resume') return;
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { session_id: `runtime-${connection}`, resumed: 'durable-approval', info: { running: true }, messages: [] } }));
+        if (connection === 1) setTimeout(() => {
+          socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'approval.request', session_id: 'runtime-1', payload: { description: 'Confirm once' } } }));
+          setTimeout(() => socket.close(), 5);
+        }, 5);
+      });
+    });
+    let snapshot!: HermesSessionSnapshot;
+    const controller = new UpstreamHermesSessionController({
+      profileId: 'default',
+      socketProvider: { getFreshSocketUrl: async () => origin },
+      socketFactory: (url) => new WebSocket(url) as never,
+      reconnectDelaysMs: [0]
+    });
+    controllers.push(controller);
+    controller.subscribe((value) => { snapshot = value; });
+    await controller.resume('durable-approval' as HermesDurableSessionId);
+    await waitFor(() => snapshot, (value) => value.approval?.summary === 'Confirm once');
+    await waitFor(() => snapshot, (value) => connections === 2 && value.connectionState === 'open' && value.approval === null && value.error !== null);
+
+    expect(snapshot.status).toBe('awaiting-input');
+    expect(snapshot.approval).toBeNull();
+    expect(snapshot.error).toContain('cannot replay the pending approval');
+  });
 });

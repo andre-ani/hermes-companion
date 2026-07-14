@@ -220,16 +220,16 @@ describe('shell resilience', () => {
   });
 
   it('keeps Hermes spinner copy transient and distinct from persisted reasoning', async () => {
-    const [page, runs, trigger, settings] = await Promise.all([
+    const [page, controller, trigger, settings] = await Promise.all([
       source('routes/+page.svelte'),
-      source('lib/server/hermes-chat-runs.ts'),
+      readFile(new URL('../packages/hermes-adapter/src/session-controller.ts', import.meta.url), 'utf8'),
       source('lib/components/ai-elements/reasoning/reasoning-trigger.svelte'),
       source('lib/components/companion/settings-page.svelte')
     ]);
-    expect(runs).toContain("event.type === 'thinking.delta'");
-    expect(runs).toContain("event.type === 'reasoning.delta'");
-    expect(runs).toContain('thinkingStatus = string(payload.text).trim() || null');
-    expect(runs).toContain("...(terminal ? { thinkingStatus: null } : {})");
+    expect(controller).toContain("event.type === 'thinking.delta'");
+    expect(controller).toContain("event.type === 'reasoning.delta'");
+    expect(controller).toContain('thinkingStatus: text(payload.text).trim() || null');
+    expect(controller).toContain('thinkingStatus: null');
     expect(page).toContain("profileUiPreferences?.thinkingStatus === 'personality' ? message.thinkingStatus : null");
     expect(page).toContain("profileUiPreferences?.thinkingStatus !== 'hidden'");
     expect(trigger).toContain('status?.trim() || "Thinking..."');

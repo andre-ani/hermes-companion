@@ -60,10 +60,11 @@ currently deployed image. Pin changes require a new diff audit.
 | WebContentsView browser ownership | Electron Companion design | Companion-owned |
 | Pending prompt payload after a process disappears | Not authoritatively replayed by this pinned public Serve contract | Truthful pinned-contract limitation; no fabricated durable prompt |
 
-## Current duplication to subtract
+## Subtraction status
 
-- `hermes-chat-runs.ts` owns a process-local chat run map, polling snapshots,
-  recovery probes, and approval projection already represented upstream.
+- `hermes-chat-runs.ts`, its polling remote operations, renderer turn maps, and
+  the corresponding custom contracts/tests have been removed in the first
+  chat slice.
 - `hermes-serve-runs.ts` combines a custom JSON-RPC socket with coding-run and
   recovery state; it remains only until Code mode moves to the shared adapter.
 - `hermes-session-recovery.ts` interprets resume payloads for both custom paths;

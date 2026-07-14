@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CompanionRepository } from '../apps/desktop/src/lib/server/companion-repository';
@@ -98,6 +98,20 @@ describe('CompanionRepository', () => {
     await repo.addWorktree({ ...owner, projectId: 'p-1', worktreeId: 'wt-1', path: '/repo-wt', branch: 'thread/one', threadId: 't-1', writerRunId: null, createdAt: new Date().toISOString() });
     expect(await repo.listProjects()).toEqual([expect.objectContaining({ id: 'p-1' })]);
     expect(await repo.listWorktrees('p-1')).toEqual([expect.objectContaining({ worktreeId: 'wt-1' })]);
+  });
+
+  it('never serializes Hermes transport, transcript, approval, context, model-status, or subagent state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hermes-companion-')); paths.push(directory); const file = join(directory, 'state.json');
+    const repo = new CompanionRepository(file);
+    await repo.setWorkspaceLayout({ ...owner, resource: { kind: 'session', id: 'opaque-durable-id' } }, {
+      inspector: { visible: true, mode: 'docked', activeTab: 'surfaces', openTabs: [], width: 480 },
+      terminal: { visible: false, height: 260 }
+    });
+    const serialized = await readFile(file, 'utf8');
+    for (const prohibited of ['transportSessionId', 'pendingApproval', 'contextUsage', 'modelStatus', 'subagents', 'hermesMessages', 'hermesRunning']) {
+      expect(serialized).not.toContain(prohibited);
+    }
+    expect(serialized).toContain('opaque-durable-id');
   });
 
   it('isolates identical project identifiers by connection ownership', async () => {
