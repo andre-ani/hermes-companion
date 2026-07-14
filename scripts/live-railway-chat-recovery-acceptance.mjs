@@ -30,7 +30,10 @@ stdout.write('This workflow uses the existing saved Railway connection. It never
 stdout.write(`Submit this unique request in a new local draft:\n\n${request}\n\n`);
 stdout.write('After the tool starts: reload the renderer, briefly take the Mac offline, restore connectivity, wait for completion, then quit and relaunch the packaged app.\n');
 
-await new Promise((resolveOpen, reject) => execFile('open', ['-na', appPath], (error) => error ? reject(error) : resolveOpen()));
+// Reuse an already-running packaged app. Starting a second Electron main
+// process would create competing native endpoints and invalidate the recovery
+// evidence before the Hermes workflow even begins.
+await new Promise((resolveOpen, reject) => execFile('open', [appPath], (error) => error ? reject(error) : resolveOpen()));
 
 const reader = createInterface({ input: stdin, output: stdout });
 const confirm = async (question) => (await reader.question(`${question} [y/N] `)).trim().toLowerCase() === 'y';

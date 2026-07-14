@@ -887,21 +887,32 @@ async function writeUatReport(value) {
   if (!uatReportDir) return; await fsp.mkdir(uatReportDir, { recursive: true }); await fsp.writeFile(path.join(uatReportDir, 'report.json'), JSON.stringify(value, null, 2));
 }
 
-startupPromise = app.whenReady().then(async () => {
-  ipcMain.handle('native:invoke', (_event, capability, input) => dispatchNative(capability, input));
-  ipcMain.on('design:annotation', (_event, annotation) => mainWindow?.webContents.send('design:annotation', annotation));
-  await startNativeServer();
-  await startRenderer();
-  return ensureWindow();
-});
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 
-app.on('activate', () => { void startupPromise.then(() => ensureWindow()); });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => {
-  releaseAnyBrowserView();
-  for (const state of terminals.values()) state.terminal.kill();
-  rendererProcess?.kill(); nativeServer?.close();
-  try { fs.unlinkSync(nativeDescriptorPath); } catch {}
-});
+  startupPromise = app.whenReady().then(async () => {
+    ipcMain.handle('native:invoke', (_event, capability, input) => dispatchNative(capability, input));
+    ipcMain.on('design:annotation', (_event, annotation) => mainWindow?.webContents.send('design:annotation', annotation));
+    await startNativeServer();
+    await startRenderer();
+    return ensureWindow();
+  });
+
+  app.on('activate', () => { void startupPromise.then(() => ensureWindow()); });
+  app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+  app.on('before-quit', () => {
+    releaseAnyBrowserView();
+    for (const state of terminals.values()) state.terminal.kill();
+    rendererProcess?.kill(); nativeServer?.close();
+    try { fs.unlinkSync(nativeDescriptorPath); } catch {}
+  });
+}
 
 module.exports = { dispatchNative };
