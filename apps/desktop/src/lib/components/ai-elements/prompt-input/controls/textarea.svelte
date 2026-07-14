@@ -7,6 +7,7 @@
 
 	interface Props {
 		ref?: HTMLTextAreaElement | null;
+		id?: string;
 		class?: string;
 		placeholder?: string;
 		value?: string;
@@ -24,6 +25,7 @@
 	// indexing
 	let {
 		ref = $bindable(null),
+		id,
 		class: className,
 		placeholder = "What would you like to know?",
 		value = $bindable(""),
@@ -143,6 +145,7 @@
 {#if controller}
 	<Textarea
 		bind:ref
+		{id}
 		class={cn(
 			"w-full resize-none rounded-none border-none p-3 shadow-none ring-0 outline-none",
 			"field-sizing-content bg-transparent dark:bg-transparent",
@@ -164,6 +167,7 @@
 {:else}
 	<Textarea
 		bind:ref
+		{id}
 		class={cn(
 			"w-full resize-none rounded-none border-none p-3 shadow-none ring-0 outline-none",
 			"field-sizing-content bg-transparent dark:bg-transparent",

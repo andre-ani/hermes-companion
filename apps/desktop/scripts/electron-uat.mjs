@@ -77,6 +77,13 @@ serveSocket.on('connection', (socket) => socket.on('message', (raw) => {
     ] });
   }
   if (request.method === 'session.context_breakdown') return reply({ context_max: 128000, context_used: 32000, context_percent: 25, estimated_total: 42000, model: 'hermes-3-pro', categories: [{ id: 'conversation', label: 'Conversation', tokens: 18000 }, { id: 'tools', label: 'Tool output', tokens: 14000 }] });
+  if (request.method === 'session.create') return reply({ session_id: 'uat-session', stored_session_id: 'uat-session', info: {}, message_count: 2 });
+  if (request.method === 'prompt.submit') {
+    socket.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { status: 'streaming' } }));
+    socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: request.params?.session_id, payload: { text: 'Confirmed: this session remains bound to its isolated preview relay and worktree.' } } }));
+    socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.complete', session_id: request.params?.session_id, payload: { status: 'complete', text: 'Confirmed: this session remains bound to its isolated preview relay and worktree.' } } }));
+    return;
+  }
   if (request.method === 'delegation.status') return reply({ active: [], paused: false, max_spawn_depth: 3, max_concurrent_children: 4 });
   if (request.method === 'projects.list') return reply({ active_id: 'uat-project', projects: [{ id: 'uat-project', name: 'Electron UAT', folders: [{ path: repositoryDir }], primary_path: repositoryDir, archived: false }] });
   if (request.method === 'projects.tree') return reply({ active_id: 'uat-project', scoped_session_ids: ['uat-session'], projects: [{ id: 'uat-project', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, previewSessions: [session], repos: [{ id: 'uat-repository', label: 'Electron UAT', path: repositoryDir, sessionCount: 1, groups: [{ id: 'uat-worktree', label: 'companion/uat-session', path: worktreeDir, totalCount: 1, sessions: [session], isMain: false }] }] }] });
@@ -171,6 +178,8 @@ const mockHermes = createHttpServer(async (request, response) => {
   } });
   if (url.pathname === '/api/config') return reply(200, { model: { default: 'gpt-5.4', openai_runtime: 'native' }, approvals: { mode: 'ask' } });
   if (url.pathname === '/api/config/defaults') return reply(200, { model: { default: 'hermes-3-pro', openai_runtime: 'native' } });
+  if (url.pathname === '/api/analytics/usage') return reply(200, { daily: [], by_model: [], totals: { total_input: 0, total_output: 0, total_cache_read: 0, total_reasoning: 0, total_estimated_cost: 0, total_actual_cost: 0, total_sessions: 0, total_api_calls: 0 }, period_days: Number(url.searchParams.get('days') ?? 30), skills: { summary: {}, top_skills: [] }, tools: [] });
+  if (url.pathname === '/api/ops/checkpoints') return reply(200, { sessions: [], total_bytes: 0 });
   if (url.pathname === '/api/model/info') return reply(200, { provider: 'openai-codex', model: 'gpt-5.4' });
   if (url.pathname === '/api/status') return reply(200, { version: '0.9.0-uat', gateway_running: true, auth_required: false });
   if (request.method === 'GET' && url.pathname === '/api/git/worktrees') return reply(200, { worktrees: [

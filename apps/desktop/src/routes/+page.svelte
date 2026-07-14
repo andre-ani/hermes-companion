@@ -97,7 +97,6 @@
   let inspectorVisible = $state(false);
   let inspectorMode = $state<InspectorMode>('docked');
   let browserLeaseId = $state(crypto.randomUUID());
-  let browserSurfaceActive = false;
   let inspectorWidth = $state(480);
   let clock = $state(Date.now());
   let approvalPending = $state(false);
@@ -212,19 +211,9 @@
   const browserOwnerKey = $derived(browserOwnerKeyFor(workspaceLayoutIdentity));
   const workspaceLayoutInteractive = $derived(Boolean(workspaceLayoutIdentity && workspaceLayoutHydratedKey === inspectorOwnerKey && !workspaceLayoutApplying));
 
-  function synchronizeBrowserSurfaceLease(active: boolean) {
-    // A release crosses the renderer/native boundary and may finish after the
-    // Browser tab has reopened. Give every visible activation a new lease so
-    // teardown captured by the previous activation can never close its view.
-    if (active && !browserSurfaceActive) browserLeaseId = crypto.randomUUID();
-    browserSurfaceActive = active;
-  }
-
-  $effect(() => {
-    // Layout hydration is not browser visibility. Keep the activation lease
-    // stable while the shell reconciles geometry or a gateway reconnects.
-    synchronizeBrowserSurfaceLease(Boolean(inspectorVisible && dockTab === 'browser'));
-  });
+  // The lease belongs to the logical workspace owner, not to tab visibility.
+  // Switching between inspector tabs must preserve the native browsing
+  // context; owner transitions rotate the lease in prepareWorkspaceLayoutOwnerTransition.
   const activeWorkspaceBranch = $derived(activeWorktree
     ? { id: activeWorktree.worktreeId, branch: activeWorktree.branch }
     : !activeSessionId && draftWorktree

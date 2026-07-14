@@ -189,7 +189,7 @@
       {#if attachments.length}<PromptInput.Attachments class="composer-attachments">{#snippet children(attachment)}<PromptInput.Attachment data={attachment} />{/snippet}</PromptInput.Attachments>{/if}
       {#if attachmentError}<p class="composer-attachment-error" role="status">{attachmentError}</p>{/if}
       <PromptInput.Body class="composer-body"><PromptInput.Textarea
-        bind:ref={textareaRef} bind:value={prompt} class="composer-textarea" placeholder={promptPlaceholder}
+        id={id === 'new-session-composer' ? 'chat-prompt' : `${id}-prompt`} bind:ref={textareaRef} bind:value={prompt} class="composer-textarea" placeholder={promptPlaceholder}
         aria-autocomplete="list" aria-controls={completionOpen ? completionListId : undefined} aria-expanded={completionOpen}
         aria-activedescendant={completionOpen && visibleCompletions[activeCompletionIndex] ? `${id}-completion-${visibleCompletions[activeCompletionIndex].id}` : undefined}
         role="combobox" oninput={handleInput} onkeydown={handleKeydown} onclick={handleCaretChange} onkeyup={handleCaretChange}

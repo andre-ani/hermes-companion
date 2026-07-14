@@ -326,6 +326,16 @@
     catch (cause) { error = cause instanceof Error ? cause.message : 'Browser action failed.'; }
   }
 
+  // A browser tab can be inactive while its native view remains owned by this
+  // session. Park it at a harmless 1px bounds instead of releasing the lease;
+  // releasing here destroys the browsing context and makes tab reactivation
+  // lose the user's page (and its session cookies).
+  async function parkBrowserView(identity = browserIdentity()) {
+    if (!browserState.open) return;
+    stopBrowserGeometrySync();
+    await resolveRemoteResult(setBrowserBounds({ ...identity, x: 0, y: 0, width: 1, height: 1 })).catch(() => undefined);
+  }
+
   async function releaseBrowserLease(ownerKey = browserOwnerKey, leaseId = browserLeaseId) {
     if (typeof window === 'undefined') return;
     if (ownerKey === browserOwnerKey && leaseId === browserLeaseId) { ++browserOperationGeneration; previewPending = false; }
@@ -352,7 +362,7 @@
     const identity = browserIdentity();
     untrack(() => {
       if (isBrowserVisible) { void loadBrowserStatus({ invalidatePendingOpen: true }); return; }
-      void releaseBrowserLease(identity.ownerKey, identity.browserLeaseId);
+      void parkBrowserView(identity);
     });
   });
   $effect(() => {

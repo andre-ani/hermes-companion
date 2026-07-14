@@ -59,6 +59,12 @@ family is not release-complete merely because part of it is done.
   production builds passed at the last coherent checkpoint. The current full
   test result is tracked below and is a release gate, not hidden by this
   summary.
+- **Packaged fixture gate:** the macOS Electron UAT is green for the current
+  release-candidate fixture, including chat mutation/streaming, context usage,
+  right-dock review and staged diff, bottom terminal, browser reactivation and
+  isolation, settings, reload/layout recovery, unavailable-history lifecycle,
+  and native project/worktree/files/PTY/Git/PR flows. This fixture evidence
+  does not replace the remaining real-Runtime proof below.
 
 See [`current-checkpoint.md`](./current-checkpoint.md) and the
 [`requirements-status.md`](./requirements-status.md) evidence ledger for the
