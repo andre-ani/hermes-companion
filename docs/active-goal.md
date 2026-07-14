@@ -1,5 +1,9 @@
 # Active goal: finish the stable daily driver
 
+**Status: complete on 2026-07-14.** The qualified application commit is
+`47fc50a`. Hermes Companion is now in dogfooding and maintenance; the stop
+condition at the end of this document applies.
+
 This document is the authoritative completion target for Hermes Companion. It
 supersedes the deleted background-Run goal, broad Hermes Desktop parity plans,
 prototype scaffolding, and historical implementation checklists.
