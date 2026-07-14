@@ -1,35 +1,67 @@
-# Architecture
+# Architecture and ownership
 
-Hermes Companion has three separately versioned processes:
+Hermes Companion is a SvelteKit and Electron desktop client for one upstream
+Hermes runtime. It is not a second Hermes frontend SDK or control plane.
 
-1. The SvelteKit renderer/server owns typed capabilities and UI composition.
-2. Electron owns privileged local operations: windows, WebContentsView, Git,
-   PTYs, encrypted secrets, notifications, and application lifecycle.
-3. The companion bridge provides the same privileged host capabilities beside
-   a remote Hermes gateway.
+## Authoritative ownership
 
-Every user or agent action begins in a `*.remote.ts` capability with a Zod
-schema. Local native work goes through the loopback native capability service;
-remote native work goes through the versioned bridge. UI components never call
-Git, PTYs, or Hermes APIs directly.
+| Capability or state | Authority and mutation owner | Reconnect/reload source | Allowed Companion projection |
+| --- | --- | --- | --- |
+| Sessions, durable IDs, transcript, running/interrupt state | Hermes Serve and Hermes session storage | `session.resume`, history APIs, `session.info`, and subsequent events | Current durable session ID, selection, loading/error presentation |
+| Transport IDs and JSON-RPC request correlation | The live upstream shared client | Discarded with the socket; a new socket receives a new transport ID | None outside the live controller |
+| Models, provider resolution, context usage, approvals, subagents | Hermes | Hermes queries/events after reconnect | Transient view model only |
+| Hermes projects and session grouping | Hermes project/session APIs | Fresh project/session queries | Expanded rows and selection only |
+| Railway credential and Serve-ticket authentication | Companion Electron/server boundary | Encrypted credential store, then a newly minted single-use ticket | Connection status; never the credential or ticket |
+| Execution bridge, path confinement, writer leases | Companion bridge/native capability layer | Bridge state and execution-host inspection | Opaque binding and lease status |
+| Git worktree filesystem, branch, terminal, files, Git, preview | The execution host and Git | Fresh native/bridge queries | Selected tab, layout, editor and preview presentation |
+| Browser windows and native surfaces | Electron | Electron surface registry keyed by logical owner | Tab, URL, bounds, visibility, focus |
+| Desktop presentation | Companion | Companion preferences where persistence is useful | Drafts, selection, scroll, layout, pane state |
 
-## Ownership boundary
+Hermes-owned state may be cached for rendering while connected, but it is never
+accepted as authoritative after reload or transport loss. A cache is replaced
+by the next Hermes resume/query/event result.
 
-Hermes remains authoritative for profiles, sessions, messages, memory, skills,
-MCP, approvals, jobs, credentials, messaging, model/provider configuration,
-and agent state. The companion persists only connection links plus project,
-worktree, run, preview, Git-review, and annotation metadata. The repository does
-not read or parse Hermes private files.
+## Process boundary
+
+1. The sandboxed renderer composes Svelte UI and runs the framework-independent
+   upstream Hermes shared client through a thin Svelte adapter.
+2. SvelteKit remote functions expose governed Companion capabilities such as
+   credential-backed ticket minting and native/bridge operations. They do not
+   implement a parallel Hermes session state machine.
+3. Electron owns encrypted secrets, native browser surfaces, local Git/PTYs,
+   notifications, and application lifecycle.
+4. The Companion bridge exposes the same path-confined execution capabilities
+   beside the Railway Hermes runtime.
+
+Long-lived Railway credentials never cross into the renderer. The renderer may
+receive one short-lived, single-use Hermes WebSocket URL immediately before it
+opens a physical socket. On reconnect it requests a new URL and resumes by the
+durable Hermes session ID; it never replays a submitted prompt.
+
+## Source-reuse boundary
+
+- Reuse framework-independent upstream modules directly.
+- Port behavior from upstream UI code only as an explicit transition model in
+  framework-neutral TypeScript.
+- Let Svelte own lifecycle subscription and presentation. Do not reproduce
+  React component, hook, effect, context, or store topology.
+- Keep pinned-runtime differences in named compatibility shims. Compatibility
+  code is not a new source of truth and has a deletion trigger.
 
 ## Security boundary
 
-- SvelteKit and the Electron native service bind to loopback only.
-- Native requests require a random bearer token stored in a mode-0600 runtime
-  descriptor.
+- SvelteKit and Electron native services bind to loopback.
+- Native calls require the random mode-0600 runtime bearer token.
 - Renderer processes use context isolation, sandboxing, and no Node access.
-- General browsing and preview browsing use fresh isolated Electron sessions.
-- Design Mode is injected only for an unexpired, authorized preview lease.
-- Provider credentials are owned by Hermes and remain on the Hermes execution
-  host. Companion never launches provider CLIs. If the user explicitly enables
-  Hermes's optional Codex app-server runtime, Hermes owns that subprocess and
-  translates its events and approvals into Hermes state.
+- Remote WebSocket URLs must be `wss:`; local development may use loopback
+  `ws:`. Ticket-bearing URLs must never be logged or persisted.
+- General and preview browsing use isolated Electron sessions. Design-mode
+  injection is allowed only for an authorized preview lease.
+- Provider credentials and agent subprocesses remain Hermes-owned.
+
+## Completion rejection rules
+
+A capability is not complete when it reconstructs durable Hermes facts from
+Companion storage, persists transport session IDs, substitutes renderer/server
+polling for the upstream client, tests for custom scaffolding rather than
+behavior, or structurally translates a React implementation into Svelte.

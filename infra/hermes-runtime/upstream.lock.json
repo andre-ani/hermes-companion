@@ -1,0 +1,9 @@
+{
+  "image": "nousresearch/hermes-agent",
+  "imageDigest": "sha256:8986f497b2dd9a89bd455bdd233070c32ae9d6e7176087904d5d0a78294a5bf8",
+  "sourceRepository": "https://github.com/NousResearch/hermes-agent.git",
+  "sourceCommit": "7acaff5ef2bcbaa22bd23b72efe60906123a4f55",
+  "desktopVersion": "0.17.0",
+  "sharedPackage": "vendor/hermes-agent/apps/shared"
+}
+

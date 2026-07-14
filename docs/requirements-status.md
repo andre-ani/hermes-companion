@@ -1,27 +1,28 @@
 # Daily-driver evidence ledger
 
-This is an evidence ledger, not a second product goal. The authoritative scope,
-ordering, cut line, and stop condition are in [`active-goal.md`](active-goal.md).
-Evidence listed here proves only the named workflow and platform.
+The current scope and stop condition are in `active-goal.md`. Earlier packaged
+recovery evidence remains useful regression evidence, but it exercised the
+custom Companion chat state machine and does not prove the target ownership
+model.
 
-| Release family | Current evidence | Remaining release evidence |
+| Capability | Current evidence | Target-architecture status |
 | --- | --- | --- |
-| macOS Electron foundation | Adapter-node loopback renderer, authenticated native RPC, hardened preload, encrypted credential storage, error route, tests, production build, and isolated Electron rendering pass. The packaged app reauthenticated against live Railway with a fresh credential, preserved that credential through encrypted persistence, and recovered the same profile and session after full process restart. | Actual Mac sleep/wake recovery. Windows, Linux, signing, and publication are outside this goal. |
-| Lean Hermes runtime | Railway builds a derived image from one pinned, unmodified Hermes Agent base. It adds only the co-located Companion execution bridge/proxy needed for worktrees, terminals, files, Git, and previews; Hermes remains the sole agent runtime and owns one persistent volume. Hermes Workspace, a second agent runtime, and the retired direct AI SDK turn manager are absent. A live authenticated Serve probe passes password login (200), fresh ticket mint (200), WebSocket session creation, streamed thinking/message deltas, and completion. The packaged app also recovered after a forced public gateway loss and restore. | Actual Mac sleep/wake remains the only P0 runtime interruption not yet exercised. |
-| Sessions and chat | Real create/resume/search/rename/archive/restore/delete, pin/unread, streamed text/reasoning/tools/approvals, native text/image attachments, and history recovery have live evidence. Packaged live-Railway UAT now covers process restart, gateway loss/reconnect, authoritative completion after transport-only whitespace drift, and unavailable-history recovery while Archive, Manage, and Delete remain reachable. The disposable live terminal workflow persisted and reloaded with its tool result and final assistant response intact. Active and archived pages are fetched independently. | Actual Mac sleep/wake. Fork is intentionally deferred because the lean public Serve contract does not expose it. |
-| Profiles, models, and status | Native Hermes Agent and Hermes Code profile switching passed in Electron. Agent selects Gemini 3.5 Flash; Code selects Claude Fable 5. The packaged live-Railway app preserved the active profile, Gemini 3.5 Flash, Manual approval mode, enhanced gateway status, and Agents state through reload/recovery. Credential reauthentication passed. Context usage now resumes the durable session, queries Hermes with its fresh transport ID on the same socket, and visibly reports `19K / 1M`, model, and category totals in a pointer-opened packaged popover. Two fresh safe terminal actions in Manual mode emitted no `approval.request`; that real-runtime limitation is recorded instead of fabricating approval evidence. A live Serve delegation probe observed the subagent lifecycle and confirmed `subagent.interrupt`. | Populated subagent constrained-width behavior belongs to the final shared-polish pass. Resolved routed-model identity remains unavailable because Serve does not emit it. |
-| Projects and ordinary worktrees | Native Hermes project create/rename/archive/restore/delete, authoritative tree hydration, ordinary linked-worktree create/session/remove, main-checkout protection, and cleanup have prior live Railway/Electron evidence. | Recheck the complete ordinary loop in the packaged release candidate. Stacked/parent-linked worktrees and unusual conflict flows are outside this goal. |
-| Terminal and files | Worktree-bound PTY lifecycle and confined file list/read/edit/search/create/move/delete have deterministic tests and prior native Electron UAT, including shell cwd, editor save, and Git visibility. | Repeat terminal, file edit, reload, and session-isolation flow against the release candidate. |
-| Changes, Git, and PR | Native Hermes working-tree/branch status, lazy diffs, stage/unstage, and commit have prior live evidence. The right dock owns review UI; there is no center-pane duplicate. | Live revert confirmation, push, and draft-PR pass, then release-candidate repetition. Truthful per-turn baselines remain absent because Hermes does not persist a turn base SHA. |
-| Browser and preview | Isolated Electron browser sessions, safe navigation, full-screen layout, bridge authorization primitives, and compact right-dock ownership have deterministic evidence. | Prove one real project preview/reload/session-restoration flow. Advanced annotation, screenshot automation, favorites/history, and DevTools parity are outside this goal. |
-| Shell and overlays | Pane controls remain reachable, profile/model/session menus are anchored, session context actions are real, status uses JetBrains Mono, and current Electron probes show no document overflow or alert. The unsupported Fork action and parity-only Capabilities/settings surfaces were removed. | One deliberate normal/constrained/reduced-motion polish pass covering all qualified workflows. |
-| Build gates | Current full suite: 42 files and 245 tests passed; Svelte check reports 0 errors and 0 warnings; bridge TypeScript check passes; the macOS package rebuild passes, and its live context/restart UAT is green. | Final security/release checks and packaged macOS UAT after the remaining workflow gates. |
+| Railway auth and pinned runtime | Password login, fresh ticket minting, encrypted credential persistence, and live Serve probes previously passed. | Retain as Companion-owned; lock image digest to source/submodule revision. |
+| Sessions and chat | Create/resume, streaming, attachments, reload, gateway loss, and unavailable-history flows passed on the old custom run map. | Not complete until upstream shared client owns transport and Hermes resume/history owns recovery. |
+| Context, model, approvals, subagents | Live context/model/subagent probes passed; real approval emission was not deterministic. | Rehydrate from Hermes; never persist as Companion authority. Preserve truthful approval limitation. |
+| Projects and worktrees | Hermes project operations plus native/bridge worktree flows have prior evidence. | Frozen during chat slice; later remove synthesized Hermes metadata while keeping bridge authorization and writer leases. |
+| Terminal, files, Git, preview, browser | Native/bridge tests and packaged fixture UAT passed. | Companion-owned and out of the first subtraction slice. |
+| Electron shell | Packaged layout, settings, browser ownership, and reload fixture UAT passed. | Preserve; remove only page-owned Hermes recovery state. |
 
-## Explicitly non-blocking
+## Architecture completion requirements
 
-Pets, achievements, journeys, Kanban parity, voice/TTS, plugin management,
-analytics/Insights parity, checkpoint administration, advanced browser tooling,
-Design Mode, exhaustive webhook/update/backup parity, unusual worktree topology,
-cross-platform qualification, signing, and public distribution do not block this
-release. Existing code for a deferred family is not evidence that it belongs in
-primary navigation or startup work.
+A migrated capability is rejected if it reconstructs a durable Hermes fact from
+Companion persistence, stores a transport session ID outside a live controller,
+uses polling instead of the available upstream client, asserts custom
+scaffolding in tests, introduces React into the product graph, or structurally
+ports React application architecture into Svelte.
+
+## Deferred until the chat gate passes
+
+Code-mode migration, repository/workspace subtraction, the remaining ordinary
+coding loop, sleep/wake qualification, shared polish, signing, and distribution.
